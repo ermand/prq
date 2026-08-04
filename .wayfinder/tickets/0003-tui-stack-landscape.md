@@ -3,8 +3,8 @@ id: 0003
 title: Viable TUI stacks for a 2026 terminal app
 parent: map
 type: research
-status: open
-assignee: ~
+status: closed
+assignee: Main
 blocked_by: []
 ---
 
@@ -35,3 +35,34 @@ Note the available runtimes on this machine: Bun 1.3.14, Node 24.15.0, Go, Cargo
 1.84.1, Python 3.14.6. Do not pick a winner — that decision belongs to
 *Language and TUI framework*. Lay out the tradeoffs so it can be made in one
 sitting.
+
+## Resolution
+
+Findings: [0003-tui-stack-landscape.md](../research/0003-tui-stack-landscape.md).
+Five candidates surveyed live — Go + Bubble Tea v2, Rust + Ratatui, Bun +
+OpenTUI, TypeScript + Ink, Python + Textual — with hello-worlds built and
+measured locally. `tview` is stalled. **No winner picked; that is
+*Language and TUI framework*.**
+
+**OSC 8 hyperlinks split the field.** Lipgloss `Style.Hyperlink()`, OpenTUI
+`link()`, `ink-link` and Textual/Rich all emit them — confirmed by capturing raw
+PTY bytes. **Ratatui does not**, and its issue #1028 was still blocked on
+Crossterm as of 2026-08-02. Since a clickable PR link is in the destination,
+this is close to disqualifying for Rust.
+
+**Only Textual ships first-class Tree and Collapsible widgets.** Everywhere else
+a grouped, collapsible list is hand-rolled.
+
+**Time to first painted frame** under a 120×40 PTY: Ratatui 3.4ms, Bubble Tea
+21.6ms, Ink compiled 55.5ms, Ink on Bun 75.3ms, OpenTUI on Bun 135.6ms, Textual
+255.9ms, OpenTUI compiled 321.4ms. **Binary sizes**: Rust 743KB, Go 5.0MB, Ink
+62MB, OpenTUI 70MB.
+
+**Sharp edges found:** Charm v2 has moved to `charm.land/*` import paths;
+`ratatui` 0.30 needs rustc 1.88 against the 1.84.1 installed here; OpenTUI is
+Bun-only (Node FFI fails) and has moved to `anomalyco/opentui`; `ink-spinner` has
+been stale since 2023; Bun has built-in TOML import.
+
+**`gh-dash` is the closest existing analogue** — a PR dashboard built on Bubble
+Tea v2. Worth reading before designing the layout, and worth asking whether it
+already does this job.
