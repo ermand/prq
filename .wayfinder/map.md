@@ -58,6 +58,15 @@ later implement.
   to disqualified; only Textual has first-class Tree/Collapsible; time to first
   frame spans 3.4ms (Ratatui) to 321ms (OpenTUI compiled), binaries 743KB to
   70MB; `gh-dash` is the existing analogue. No winner picked.
+- [The PR review-state taxonomy](./tickets/0005-review-state-taxonomy.md)
+  — four independent axes, not one status: **verdict** (`reviewDecision`, the
+  badge), **standing** (viewer-relative), **readiness** (merge + checks) and
+  **lifecycle** (draft). Standing turns out to be server-side via
+  `viewerDidAuthor`/`viewerLatestReview`/`viewerLatestReviewRequest`, overturning
+  0001; "someone reviewed" means `latestOpinionatedReviews`, which excludes bot
+  comment-only reviews; `reviewDecision: null` is a real fourth verdict distinct
+  from `REVIEW_REQUIRED`; identity comes from `viewer { login }`. Whole taxonomy
+  is one query at cost 1. Vocabulary in [CONTEXT.md](../CONTEXT.md).
 
 ## Not yet specified
 

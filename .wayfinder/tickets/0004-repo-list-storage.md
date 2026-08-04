@@ -29,3 +29,12 @@ shape sets the tone for everything else. Resolve:
 - Whether anything else belongs in the same file — the identity used for "is
   this mine", refresh interval, theme — or whether config and repo list are
   separate concerns in separate files.
+
+## Direction from the driver
+
+YAML config file. Captured 2026-08-04; not yet a resolution — the remaining
+sub-questions (what a repo entry contains, grouping, how it is edited, whether
+provider is explicit) are still open.
+
+One fact to weigh when this is resolved: if the stack is Bun, TOML import is
+built in and YAML needs a dependency.

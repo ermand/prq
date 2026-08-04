@@ -44,3 +44,19 @@ Grounded in [0001b-graphql-query-budget.md](../research/0001b-graphql-query-budg
 Note the sampled repos were all large public OSS; if the real repo list is a
 handful of private repos with a few open PRs each, most of this pressure
 evaporates — establish which world we are in before designing for the hard one.
+
+## Direction from the driver
+
+"Scan 5 at a time and cache them for 15 mins." Captured 2026-08-04.
+
+Needs disambiguating before it can be a resolution: **5 repos concurrently, or 5
+PRs per repo?** The measurements bear on each differently — 10 repos × 5 PRs with
+a rich selection ran in 8.14s at cost 1, comfortably inside the ~10s budget, so
+either reading is affordable.
+
+The 15-minute cache is clear and settles most of *Refresh, caching, and
+staleness*.
+
+Left open: what the UI says when a repo has more open PRs than were fetched.
+`cli/cli` has 63 open; a 5-per-repo cap would show 5 with no indication the other
+58 exist.
