@@ -124,3 +124,24 @@ failed leaves all of its PRs unknown.
 `mergeStateStatus` is not used. It measurably doubles single-repo query latency
 (3.48s → 5.42s, reproducible) and buys nothing `mergeable` plus the check rollup
 does not already give.
+
+## Amendment — 2026-08-04, from *Relevance buckets and sort order*
+
+**`i-requested-changes` and `i-approved` must be derived from
+`latestOpinionatedReviews` filtered to `viewer.login`, not from
+`viewerLatestReview`.**
+
+A comment-only review does not dismiss a standing changes-request, but it *does*
+become `viewerLatestReview.state`. Reading standing from that field silently
+downgrades a live block to `i-commented`. Confirmed live: `oven-sh/bun#36831` has
+`Jarred-Sumner` at `latestReviews → COMMENTED` while
+`latestOpinionatedReviews → CHANGES_REQUESTED`.
+
+There is no `viewerLatestOpinionatedReview` field, so the filter is client-side
+over data already selected — no extra cost. `viewerLatestReview` stays correct for
+`i-commented`: a review by me with no opinionated counterpart.
+
+Also established there: `ReviewRequest` carries **no timestamp** (fields are
+`asCodeOwner`, `databaseId`, `id`, `pullRequest`, `requestedReviewer`), so "how
+long has this been waiting on me" has no exact answer; and a **draft PR can carry
+a review request**, so `awaiting-me` and `draft` co-occur.

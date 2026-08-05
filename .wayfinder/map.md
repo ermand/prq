@@ -74,6 +74,16 @@ later implement.
   requests — measured, it missed 27 of 32. Cost 1 each, 0.5–0.8s, parallel,
   versus 323s and cost 119 for full per-repo pagination. Truncation becomes moot:
   the filters define the set rather than clipping it.
+- [Relevance buckets and sort order](./tickets/0007-relevance-buckets-and-sort.md)
+  — **seven buckets, first match wins**: Awaiting me → I blocked it and it moved →
+  Mine ready to land → Mine needs work → Mine waiting → I blocked it unchanged →
+  Ambient. Per-bucket sort keys with a deterministic repo+number tiebreak; empty
+  buckets render nothing; one view plus a grouping toggle and filter line; nothing
+  hidden by default. Bucket 2 earns its place — 32 of 40 sampled changes-requested
+  PRs carried a stale block. **Amends 0005**: my blocking review must be read from
+  `latestOpinionatedReviews` filtered to the viewer, not `viewerLatestReview`,
+  since a later comment masks a standing block. Also: `ReviewRequest` has no
+  timestamp, and drafts can carry review requests.
 
 ## Not yet specified
 

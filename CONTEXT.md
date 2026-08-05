@@ -45,10 +45,12 @@ Exactly one applies, resolved in this order — the first match wins.
 **awaiting-me**: A review has been requested of you and you have not answered it.
 Includes the re-request case, where you reviewed, the author pushed, and asked
 again — the ball is back in your court, so this beats any prior verdict of yours.
-**i-requested-changes**: Your latest review requested changes and no new request
-is outstanding.
-**i-approved**: Your latest review approved.
-**i-commented**: Your latest review only commented — an opinion-free review.
+**i-requested-changes**: Your latest *opinionated* review requested changes and no
+new request is outstanding. Read from the opinionated reviews, never from your
+latest review — a later comment of yours does not withdraw a block.
+**i-approved**: Your latest opinionated review approved.
+**i-commented**: You reviewed but never formed an opinion — a comment-only
+review with no opinionated counterpart.
 **not-involved**: None of the above.
 
 ### Cross-cutting terms
@@ -65,8 +67,21 @@ stands on the record but no longer describes the current code.
 _Avoid_: outdated, dismissed — `dismissed` is a distinct GitHub state
 
 **Scan**:
-One pass over the saved repository list that refreshes every PR's state.
+One pass that refreshes every PR's state. Two parallel searches scoped to the
+saved repositories — the review queue and everything else you touch — unioned.
+Not a walk over the repository list.
 _Avoid_: fetch, sync, poll
+
+**Bucket**:
+One of the seven ordered groups the dashboard renders, derived from standing and
+refined by readiness. A PR belongs to exactly one, resolved first-match-wins.
+Empty buckets render nothing.
+_Avoid_: group, section, category
+
+**Stale block**:
+A changes-request of yours whose commit is no longer the PR's head — the author
+has pushed since. The dashboard's most actionable state, because the author is
+waiting on you and cannot tell.
 
 **Stack**:
 GitHub's first-class ordered chain of dependent PRs, each based on the one below.
