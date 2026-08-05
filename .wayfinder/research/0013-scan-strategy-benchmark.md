@@ -88,12 +88,51 @@ They demonstrate the cost profile, not an empty dashboard.
 `stack` and `stackEntry` select inside the search result fragment without error,
 so nothing is given up by using `search` over per-repo `pullRequests`.
 
+## Search qualifier semantics
+
+**`involves:` does not include review requests.** This is the load-bearing
+correction: a single `involves:@me` query would miss most of the PRs actually
+waiting on you. `involves:` is `author` OR `assignee` OR `mentions` OR
+`commenter` — a requested reviewer who has not yet said anything matches none of
+those.
+
+Measured across `cli/cli`, `charmbracelet/bubbletea` and `denoland/deno`, open
+PRs only. The last two columns count set members present in that qualifier but
+**absent** from `involves:`.
+
+| User | `involves:` | `review-requested:` | `reviewed-by:` | rr ∖ inv | revBy ∖ inv |
+| --- | --- | --- | --- | --- | --- |
+| `williammartin` | 14 | 32 | 7 | **27** | 0 |
+| `babakks` | 22 | 38 | 4 | **22** | 0 |
+| `jtmcg` | 1 | 0 | 0 | 0 | 0 |
+| `heaths` | 3 | 0 | 1 | 0 | 0 |
+| `andyfeller` | 0 | 0 | 0 | 0 | 0 |
+
+- **`review-requested:` must be its own query.** Search qualifiers are ANDed;
+  there is no way to OR two of them in one query.
+- **`reviewed-by:` is redundant.** Zero escapes from `involves:` across all five
+  users — submitting a review makes you a commenter.
+- **`team-review-requested:<org>/<team>` is accepted** as a qualifier (no error,
+  count 0 for a guessed team). Review requests routed to a team are therefore
+  reachable, but only if the team slug is known.
+- **`sort:updated` is accepted** and returned 64 for open `cli/cli` PRs.
+
+## Repo scope scales
+
+`repo:` qualifiers were accepted at 10, 20, 30, 40 and 60 occurrences — up to a
+1279-character query — with no length or operator-count error. Scoping a search
+to a long saved repo list is not a constraint.
+
 ## Open gaps
 
 - GitHub's search API caps total results at 1000 regardless of paging. Untested
-  here, and it only bites if an unfiltered dashboard is chosen.
-- Search relevance ordering was left at default; `sort:updated` was not compared.
+  here, and unreachable in practice once the viewer filters are applied.
 - All repos sampled are large public OSS. A realistic private work repo with a
   handful of open PRs was not measured and will be far cheaper by every metric.
 - Whether `search` honours private-repo visibility identically to per-repo
   queries was not verified.
+- Whether an approval submitted with no comment body still registers as
+  `commenter` was not directly constructed — inferred from 0 escapes across 12
+  `reviewed-by:` results.
+- Team slugs for `team-review-requested:` cannot be discovered from the repo
+  list alone.

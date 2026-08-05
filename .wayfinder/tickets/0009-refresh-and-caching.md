@@ -13,29 +13,36 @@ blocked_by: [0013]
 When does the tool fetch, what does it keep, and how does it tell you what you
 are looking at is old?
 
-Now grounded in real numbers. A single aliased GraphQL query over 10 repos
-returns in **7.9–10.3s**; the same work as sequential `gh pr list` shell-outs
-takes **82s**, fully concurrent **11.35s**. Rate limit is a non-issue — a scan
-costs 1–4 points against 5000/hr — so wall clock is the entire constraint, and
-8-ish seconds is squarely in the range where a cache changes the felt
-experience. Resolve:
+**Reframed after *How many open PRs a scan actually fetches, and how it pages*.**
+A scan is now two parallel `search` queries at cost 1 each, **0.5–0.8s total** —
+not the 8–10s aliased-repository scan this ticket was written against, and not the
+323s full pagination that was rejected. That collapses most of the question: at
+sub-second, a cache is no longer about hiding latency.
 
-- What happens on launch. Blocking scan behind a spinner, or render the last
-  known state instantly and refresh underneath it.
-- Whether anything is persisted between runs, and if so where and in what form.
-  A cache is only worth it if the measured scan is slow enough to notice.
-- Manual refresh: a key, and whether it refetches everything or just the
-  selected repo.
-- Whether there is any automatic refresh while the TUI is open, and at what
-  interval. Weigh against rate-limit headroom.
-- How staleness is communicated — a timestamp, a dimmed row, nothing.
-- Behaviour when one repo in the list fails while the rest succeed. Whether a
-  partial scan renders, and whether it is cached.
-- Whether repos are scanned concurrently, and any cap on that concurrency.
-- **What "fast enough" means, and what N is.** Graduated here from the map's fog
-  now that the cost is measured. How many repos will actually be on the list —
-  5 or 50 — and what launch-to-usable latency is acceptable. Note the measured
-  numbers come from large public OSS repos; a handful of private repos with a
-  few open PRs each will be far cheaper.
-- Whether an HTML 502 from an over-budget query is retried automatically, with
-  what backoff, and whether a retry is even likely to succeed.
+The driver has already decided **a 15-minute cache**. What remains is what that
+means concretely:
+
+- **What the cache is actually for**, given the scan is sub-second. Sparing the
+  API on repeated launches, surviving offline, or instant first paint. The answer
+  determines whether it is even worth persisting.
+- What happens on launch: scan and wait (sub-second, so plausibly just fine), or
+  paint cached state and refresh underneath.
+- Where the cache lives and in what form, and whether it holds raw API responses
+  or the derived domain model. Note the model may change between versions while
+  the raw response will not.
+- What a 15-minute TTL does when it expires while the TUI is open — silent
+  refetch, visible refresh, or nothing until asked.
+- Manual refresh: which key, and whether it bypasses the TTL.
+- How staleness is shown — a timestamp, a dimmed header, nothing.
+- **Partial failure.** The union of two queries is the whole result set, so if one
+  query fails the result is incomplete in a way the user cannot see. Whether a
+  partial union is rendered at all, whether it is cached, and how it is labelled.
+- Whether an HTML 502 is retried automatically and with what backoff. With two
+  cheap queries a retry costs almost nothing, which argues for retrying rather
+  than degrading.
+- **What "fast enough" means, and what N is.** Graduated here from the map's fog.
+  Largely answered by the scan design — cost no longer scales with repo count —
+  but confirm how many repos the list will actually hold.
+
+Obsolete, and deliberately dropped: per-repo scan concurrency and its cap. There
+are no per-repo queries any more.

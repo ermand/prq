@@ -67,20 +67,31 @@ later implement.
   comment-only reviews; `reviewDecision: null` is a real fourth verdict distinct
   from `REVIEW_REQUIRED`; identity comes from `viewer { login }`. Whole taxonomy
   is one query at cost 1. Vocabulary in [CONTEXT.md](../CONTEXT.md).
+- [How many open PRs a scan actually fetches, and how it pages](./tickets/0013-scan-breadth-and-paging.md)
+  — a scan is **two `search` queries**, not a walk over the repo list: the saved
+  repos become `repo:` scope qualifiers. `review-requested:@me` and
+  `involves:@me`, unioned. Two are required because `involves:` excludes review
+  requests — measured, it missed 27 of 32. Cost 1 each, 0.5–0.8s, parallel,
+  versus 323s and cost 119 for full per-repo pagination. Truncation becomes moot:
+  the filters define the set rather than clipping it.
 
 ## Not yet specified
 
-- **Degraded and error states.** The failure modes are now known concretely — an
-  HTML 502 from an over-budget query, an HTTP 200 carrying partial `data` plus a
-  per-field `errors[]` array, a single repo failing while the rest succeed. How
-  the *TUI* surfaces them still hangs on the layout existing to place them in.
-  Retry policy has graduated into *Refresh, caching, and staleness*.
+- **Degraded and error states.** The failure surface shrank with the scan design —
+  two cheap queries, either of which can return an HTML 502 that will not parse as
+  JSON, or an HTTP 200 carrying partial `data` plus a per-field `errors[]` array.
+  A partial union must read as incomplete rather than as whole. How the *TUI* says
+  so still hangs on the layout existing to place it in.
 - **First-run and empty states.** No repos saved yet; a saved repo with zero open
   PRs. Hangs on how the repo list is managed.
 - **Distribution and install.** Homebrew, `go install`, npm, a single binary.
   Hangs on the tech stack choice. Measured binary sizes now span 743KB (Rust) to
   70MB (OpenTUI), so this is a real axis rather than a footnote.
 - **Colour, theming, and terminal capability fallbacks.** Hangs on the layout.
+- **Team-routed review requests.** `team-review-requested:<org>/<team>` is a valid
+  qualifier but needs team slugs, which the repo list does not carry. Surfaced by
+  the scan-strategy work; too coarse to ticket until it is known whether any of
+  the driver's review requests actually arrive via a team.
 - **Whether `gh-dash` already does this job.** A PR dashboard on Bubble Tea v2
   turned up during the TUI survey. Worth an honest look before specifying a
   competitor to it; too coarse to ticket until someone has actually run it.
