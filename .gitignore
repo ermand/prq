@@ -1,1 +1,3 @@
 banks/
+node_modules/
+dist/

@@ -145,3 +145,22 @@ Also established there: `ReviewRequest` carries **no timestamp** (fields are
 `asCodeOwner`, `databaseId`, `id`, `pullRequest`, `requestedReviewer`), so "how
 long has this been waiting on me" has no exact answer; and a **draft PR can carry
 a review request**, so `awaiting-me` and `draft` co-occur.
+
+## Amendment — 2026-08-04, from implementation review
+
+**A blocking review whose `commit` is null is stale, not unchanged.**
+`PullRequestReview.commit` is nullable, and the usual reason a review loses its
+commit is that the commit no longer exists — the author force-pushed, which is
+precisely the stale-block condition. Resolving the null toward "unchanged" hid
+the most actionable state on the board inside the bucket that means "nothing has
+happened". Every other unknown in this model resolves toward the non-alarming
+reading; this is the one place where the non-alarming reading is the one that
+suppresses action.
+
+Also settled during implementation: **every remote string is sanitised at the
+`normalize` boundary** — `\p{Cc}` and `\p{Cf}` are stripped from title, repo and
+author. A newline in a PR title otherwise breaks the renderer's one-row-per-PR
+viewport arithmetic and blanks the whole dashboard, and a bidi override lets a
+title render reversed and spoof a repo name. **A PR URL is `string | null`**,
+validated as https via `new URL`; it reaches both a spawned `open` and an OSC 8
+escape sequence, so an unvalidated one is a live injection sink.

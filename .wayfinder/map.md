@@ -17,9 +17,14 @@ later implement.
 ## Notes
 
 - **Domain**: developer tooling / terminal UI over the GitHub API via `gh`.
-- **Planning only.** This map produces decisions, not code. The one exception is
-  throwaway prototypes made to react to, which are linked as assets, never
-  shipped.
+- **Planning-only was overridden on 2026-08-04.** The driver invoked `/implement`
+  and a working tool now exists in `src/`, built on the decisions settled so far.
+  Tickets 0004, 0006, 0009 were implemented from their *Direction from the
+  driver* notes rather than from resolutions, and remain open — the code is one
+  answer, not the decision. Tickets 0008 and 0011 are open too, so the stack
+  treatment and the layout/keymap in `src/tui.ts` are explicitly prototype-grade
+  and exist to be reacted to. Resolving any of these five should update the code
+  as well as the ticket.
 - **Skills every session should consult**: `/grilling` and `/domain-modeling` by
   default; `/research` for the research tickets; `/prototype` for the prototype
   tickets.

@@ -105,3 +105,23 @@ de-emphasised.
 - **Nothing is hidden by default.** Bot PRs only enter the set if you are a
   requested reviewer or have commented, so the scan already excludes the noise;
   filtering again would be hiding the same thing twice.
+
+## Amendment — 2026-08-04, from implementation review
+
+**Bucket 3 admits `checks: none` and `merge: unknown`.** The table above says
+`success`/`clean` exactly, which was written without reconciling against the
+non-committal values 0005 had already declared legitimate: `statusCheckRollup`
+is null when a repo has no CI, and `MergeableState.UNKNOWN` is normal on first
+sight because GitHub computes mergeability lazily.
+
+Requiring `success`/`clean` made *Mine, ready to land* **unreachable** on any
+repo without CI — an approved, conflict-free PR of yours sat in *Mine, waiting*
+forever, the one bucket that means "nothing to do here" — and made a PR flip
+from bucket 5 to bucket 3 between two scans once GitHub resolved mergeability,
+reshuffling the board for no user-visible reason.
+
+The rule is now positive-blocking rather than positive-ready: bucket 3 requires
+`verdict === "approved"` and no *blocking* signal — `checks` neither `failing`
+nor `pending`, `merge` not `conflicted`. Bucket 4 still tests for `failing` and
+`conflicted` positively, so the two stay disjoint, and a pending check still
+holds a PR in bucket 5.

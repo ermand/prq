@@ -1,0 +1,26 @@
+{
+  "name": "prq",
+  "description": "Open pull requests that concern you, in the terminal",
+  "module": "src/cli.ts",
+  "type": "module",
+  "private": true,
+  "bin": { "prq": "src/cli.ts" },
+  "scripts": {
+    "start": "bun src/cli.ts",
+    "scan": "bun src/scan-cli.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "check": "tsc --noEmit && bun test",
+    "build": "bun build --compile --outfile dist/prq src/cli.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@opentui/core": "^0.5.1",
+    "yaml": "^2.9.0"
+  }
+}
