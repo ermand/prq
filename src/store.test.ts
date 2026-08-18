@@ -5,7 +5,7 @@ import { rm } from "node:fs/promises";
 import { existsSync, statSync } from "node:fs";
 import { diff } from "./changes";
 import { normalize, type PullRequest, type RawPullRequest } from "./domain";
-import { SCHEMA_VERSION, Store, storePath } from "./store";
+import { resolveStorePath, SCHEMA_VERSION, Store, storePath } from "./store";
 
 function pr(over: Partial<PullRequest> = {}): PullRequest {
   const base = normalize(
@@ -352,5 +352,65 @@ describe("storePath hardening", () => {
     expect(storePath({ XDG_STATE_HOME: "./rel" } as NodeJS.ProcessEnv)).toEndWith(
       join(".local", "state", "prq", "state.db"),
     );
+  });
+});
+
+describe("resolveStorePath", () => {
+  const env = {} as NodeJS.ProcessEnv;
+
+  test("falls back to the XDG default when unset", () => {
+    expect(resolveStorePath(undefined, env)).toEndWith(
+      join(".local", "state", "prq", "state.db"),
+    );
+  });
+
+  test("honours a relative path against the working directory", () => {
+    // Unlike XDG_STATE_HOME, a relative value here is the point: it is what
+    // keeps the store beside the project.
+    expect(resolveStorePath(".prq/state.db", env, "/work/proj")).toBe(
+      "/work/proj/.prq/state.db",
+    );
+    expect(resolveStorePath("state.db", env, "/work/proj")).toBe("/work/proj/state.db");
+  });
+
+  test("keeps an absolute path as given", () => {
+    expect(resolveStorePath("/var/tmp/prq.db", env, "/work/proj")).toBe("/var/tmp/prq.db");
+  });
+
+  test("expands a leading tilde", () => {
+    const expanded = resolveStorePath("~/prq/state.db", env, "/work/proj");
+    expect(expanded).toEndWith(join("prq", "state.db"));
+    expect(expanded).not.toInclude("~");
+    expect(expanded).not.toInclude("/work/proj");
+  });
+
+  test("does not treat a tilde inside a path as a home reference", () => {
+    expect(resolveStorePath("./a~b/state.db", env, "/work/proj")).toBe(
+      "/work/proj/a~b/state.db",
+    );
+  });
+
+  test("normalises a path that walks upwards", () => {
+    expect(resolveStorePath("../shared/state.db", env, "/work/proj")).toBe(
+      "/work/shared/state.db",
+    );
+  });
+});
+
+describe("a project-local store", () => {
+  const dir = join(import.meta.dir, "..", "node_modules", ".prq-local");
+  const path = join(dir, "state.db");
+  const wipe = async () => rm(dir, { recursive: true, force: true });
+
+  test("creates its directory and works from a relative path", async () => {
+    await wipe();
+    const relative = resolveStorePath(path);
+    const store = await Store.open(relative);
+    commit(store, [pr({ title: "beside the project" })]);
+    expect(store.read().prs[0]!.title).toBe("beside the project");
+    store.close();
+    // Still 0600 even outside the XDG location.
+    expect(statSync(path).mode & 0o077).toBe(0);
+    await wipe();
   });
 });

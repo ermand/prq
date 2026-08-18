@@ -16,7 +16,7 @@ import { diff, type Change } from "./changes";
 import { configPath, EXAMPLE_CONFIG, loadConfig } from "./config";
 import type { PullRequest } from "./domain";
 import { githubToken, scan } from "./github";
-import { Store, storePath, type SyncRecord } from "./store";
+import { resolveStorePath, Store, storePath, type SyncRecord } from "./store";
 import { runApp } from "./tui";
 
 export interface SyncOutcome {
@@ -104,13 +104,29 @@ async function initConfig(): Promise<void> {
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
 
+  const flagIndex = args.indexOf("--state");
+  const override = flagIndex === -1 ? undefined : args[flagIndex + 1];
+  if (flagIndex !== -1 && (override === undefined || override.startsWith("-"))) {
+    throw new Error("--state needs a path");
+  }
+
   if (args.includes("--help") || args.includes("-h")) {
+    // Reports the path actually in force, not the default — otherwise a
+    // configured store is invisible in the one place people look for it.
+    let effective = storePath();
+    try {
+      const { statePath } = await loadConfig();
+      effective = resolveStorePath(override ?? statePath);
+    } catch {
+      // No config yet; the default is the honest answer.
+    }
     process.stdout.write(
       "prq — open pull requests that concern you\n\n" +
-        "  prq          open the dashboard on the last synced state\n" +
-        "  prq sync     sync now, then report what changed\n" +
-        "  prq init     write an example config\n" +
-        `\nconfig: ${configPath()}\nstate:  ${storePath()}\n`,
+        "  prq            open the dashboard on the last synced state\n" +
+        "  prq sync       sync now, then report what changed\n" +
+        "  prq init       write an example config\n" +
+        "  --state <path> use this state database instead of the configured one\n" +
+        `\nconfig: ${configPath()}\nstate:  ${effective}\n`,
     );
     return;
   }
@@ -121,7 +137,9 @@ async function main(): Promise<void> {
   }
 
   const config = await loadConfig();
-  const store = await Store.open();
+  // A flag beats the config, which beats the XDG default.
+  const dbPath = resolveStorePath(override ?? config.statePath);
+  const store = await Store.open(dbPath);
 
   // Every path out of here must close the store, or the WAL sidecars outlive
   // the process still carrying a copy of the data.

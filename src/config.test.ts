@@ -76,3 +76,25 @@ describe("loadConfig", () => {
     await expect(loadConfig(path)).rejects.toThrow(/\.prq-test-bad\.yaml: /);
   });
 });
+
+describe("statePath", () => {
+  test("is absent by default", () => {
+    expect(parseConfig("repos: [o/a]").statePath).toBeUndefined();
+  });
+
+  test("is carried through, trimmed", () => {
+    expect(parseConfig("repos: [o/a]\nstatePath: .prq/state.db").statePath).toBe(
+      ".prq/state.db",
+    );
+    expect(parseConfig('repos: [o/a]\nstatePath: "  ./state.db  "').statePath).toBe(
+      "./state.db",
+    );
+  });
+
+  test("rejects a blank or non-string value", () => {
+    // An empty path would resolve to the working directory itself.
+    expect(() => parseConfig('repos: [o/a]\nstatePath: ""')).toThrow(/non-empty string/);
+    expect(() => parseConfig('repos: [o/a]\nstatePath: "   "')).toThrow(/non-empty string/);
+    expect(() => parseConfig("repos: [o/a]\nstatePath: 42")).toThrow(/non-empty string/);
+  });
+});

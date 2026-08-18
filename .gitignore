@@ -1,3 +1,11 @@
 banks/
 node_modules/
 dist/
+
+# The state database holds private repo names and PR titles. It is deliberately
+# allowed to live inside the project via `statePath`, so it must never be
+# committed — including SQLite's WAL sidecars.
+*.db
+*.db-wal
+*.db-shm
+.prq/

@@ -38,3 +38,28 @@ provider is explicit) are still open.
 
 One fact to weigh when this is resolved: if the stack is Bun, TOML import is
 built in and YAML needs a dependency.
+
+## Implemented as a prototype — 2026-08-07
+
+**The ticket stays open.** What the config carries today:
+
+- `repos:` — a flat list of `owner/name` strings, deduplicated, validated at both
+  the loader and the query sink. No grouping, no per-repo flags, no display name.
+- `statePath:` — added on request so the state database can sit beside a project
+  instead of under `~/.local/state`. Absent means the XDG default. A **relative**
+  path is resolved against the working directory, which is deliberately the
+  opposite of how `XDG_STATE_HOME` is treated — a relative value there is ignored,
+  because it would silently write under whatever directory you happened to be in,
+  whereas here that is the entire point. A leading `~` expands. `--state <path>`
+  overrides it for one run.
+- `cacheTtlMinutes:` is **gone** — sync is explicit, so nothing expires. The
+  parser still tolerates the key so an old config does not start failing.
+
+No in-TUI editing, and no `prq add owner/repo`. The file is hand-edited; `prq
+init` writes a commented example.
+
+One consequence worth deciding on: the store holds private repo names and PR
+titles, so a project-local `statePath` needs `.gitignore` coverage. The repo now
+ignores `*.db`, its WAL sidecars and `.prq/`, but a *user* pointing `statePath` at
+someone else's project gets no such protection. Whether the tool should refuse to
+write inside a git working tree that does not ignore it is an open question.

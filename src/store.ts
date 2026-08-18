@@ -17,7 +17,7 @@
 
 import { Database } from "bun:sqlite";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { chmod, mkdir } from "node:fs/promises";
 import { APP_NAME } from "./config";
 import { isChangeKind, type Change, type ChangeKind } from "./changes";
@@ -33,6 +33,26 @@ export function storePath(env: NodeJS.ProcessEnv = process.env): string {
   const base =
     configured && isAbsolute(configured) ? configured : join(homedir(), ".local", "state");
   return join(base, APP_NAME, "state.db");
+}
+
+/**
+ * Resolves a configured or flag-supplied store location.
+ *
+ * Unlike `XDG_STATE_HOME`, a relative value here is honoured and resolved
+ * against the working directory — that is the whole point of the setting, which
+ * exists so the store can sit beside a project rather than in a home directory.
+ */
+export function resolveStorePath(
+  configured: string | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+  cwd = process.cwd(),
+): string {
+  if (configured === undefined) return storePath(env);
+  const expanded =
+    configured === "~" || configured.startsWith("~/")
+      ? join(homedir(), configured.slice(1))
+      : configured;
+  return resolve(cwd, expanded);
 }
 
 const SCHEMA = `

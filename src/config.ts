@@ -15,6 +15,12 @@ export const APP_NAME = "prq";
 
 export interface Config {
   repos: string[];
+  /**
+   * Where the state database lives. Absent means the XDG default. A relative
+   * path is resolved against the working directory, which is what makes
+   * `statePath: state.db` keep the store beside the project.
+   */
+  statePath?: string;
 }
 
 export function configPath(env: NodeJS.ProcessEnv = process.env): string {
@@ -26,6 +32,12 @@ export const EXAMPLE_CONFIG = `# ${APP_NAME} — repositories to scan
 repos:
   - owner/repo
   - owner/another-repo
+
+# Where to keep the state database. Omit for the XDG default
+# (~/.local/state/${APP_NAME}/state.db). A relative path resolves against the
+# directory you run ${APP_NAME} from. It holds private repo names and PR titles,
+# so keep it out of version control.
+# statePath: .prq/state.db
 `;
 
 /**
@@ -39,7 +51,7 @@ export function parseConfig(text: string): Config {
     throw new Error("config must be a YAML mapping with a `repos:` key");
   }
 
-  const { repos } = doc as Record<string, unknown>;
+  const { repos, statePath } = doc as Record<string, unknown>;
 
   if (!Array.isArray(repos) || repos.length === 0) {
     throw new Error("`repos` must be a non-empty list of owner/name entries");
@@ -52,10 +64,17 @@ export function parseConfig(text: string): Config {
     );
   }
 
+  if (statePath !== undefined && (typeof statePath !== "string" || statePath.trim() === "")) {
+    throw new Error("`statePath` must be a non-empty string");
+  }
+
   // A TTL used to live here. Sync is now an explicit act, so there is nothing
   // to expire: the store holds the last synced state until the driver asks for
   // another one.
-  return { repos: [...new Set(repos as string[])] };
+  return {
+    repos: [...new Set(repos as string[])],
+    ...(statePath === undefined ? {} : { statePath: statePath.trim() }),
+  };
 }
 
 export async function loadConfig(path = configPath()): Promise<Config> {
