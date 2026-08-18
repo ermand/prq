@@ -50,6 +50,14 @@ diffing against a prior scan.
 - **Settled while charting**: read-only (no writes to GitHub); dashboard of all
   open PRs with relevance grouping as the default view; explicit saved repo list,
   no auto-discovery.
+- **Settled while charting the state store (2026-08-07)**: `bun:sqlite` (built
+  in, SQLite 3.51.0, `json1` available). **"Since I last looked" means since the
+  last sync**, and **sync is an explicit on-demand act** — not a background poll
+  and not an incidental side effect of opening the tool. The diff is therefore
+  computed at sync time against the stored previous state and persisted, so it
+  survives until the next sync. No per-PR read/unread state. This only holds
+  because sync is deliberate: the driver owns the baseline, so a diff cannot be
+  destroyed by a refresh they did not ask for.
 
 ## Decisions so far
 
@@ -102,22 +110,19 @@ diffing against a prior scan.
 
 ## Not yet specified
 
-- **The SQLite state store.** Destination widened 2026-08-07 and the store is
-  decided in principle, but the ticket set is not yet cut. It hangs on one
-  unanswered question: **what "since I last looked" means** — since the last
-  scan, since the last run, per-PR read/unread, or explicit acknowledgement.
-  That answer decides the schema, so nothing downstream can be phrased sharply
-  yet. Suspected tickets once it lands: what a snapshot is and how long it is
-  kept; which axes count as "changed"; schema and migration policy for rows
-  written by older code; how change surfaces in the UI. `bun:sqlite` is built in
-  (SQLite 3.51.0, `json1` available), so no dependency decision is needed.
+- **Storing review activity as a work history.** Beyond this tool — a durable,
+  queryable record of review activity over time, feeding things that are not this
+  dashboard. Raised while widening the destination and deliberately left here: it
+  stops being a PR dashboard, so if it is wanted it is a fresh map, not a
+  continuation of this one.
 - **Degraded and error states.** The failure surface shrank with the scan design —
   two cheap queries, either of which can return an HTML 502 that will not parse as
   JSON, or an HTTP 200 carrying partial `data` plus a per-field `errors[]` array.
   A partial union must read as incomplete rather than as whole. How the *TUI* says
   so still hangs on the layout existing to place it in.
-- **First-run and empty states.** No repos saved yet; a saved repo with zero open
-  PRs. Hangs on how the repo list is managed.
+- **First-run and empty states.** No repos saved yet, and a saved repo with zero
+  open PRs. Hangs on how the repo list is managed. Note the empty-*store* first
+  run has graduated into *What sync is, and what the first one does*.
 - **Distribution and install.** Homebrew, `go install`, npm, a single binary.
   Hangs on the tech stack choice. Measured binary sizes now span 743KB (Rust) to
   70MB (OpenTUI), so this is a real axis rather than a footnote.

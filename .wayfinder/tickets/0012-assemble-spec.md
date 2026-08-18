@@ -5,7 +5,7 @@ parent: map
 type: task
 status: open
 assignee: ~
-blocked_by: [0004, 0005, 0006, 0007, 0008, 0009, 0010, 0011, 0013]
+blocked_by: [0004, 0006, 0008, 0009, 0010, 0011, 0014, 0015, 0016, 0017, 0018]
 ---
 
 ## Question
@@ -20,8 +20,10 @@ agent can execute without asking a question. It must carry:
 - The domain model and state vocabulary.
 - Config file location, format, and schema.
 - The provider seam.
-- Data acquisition: which calls, in what concurrency, with what caching and
-  refresh behaviour, and how failures degrade.
+- Data acquisition: which calls, in what concurrency, with what sync semantics,
+  and how failures degrade without corrupting the baseline.
+- **The state store**: schema, retention, migration policy, what a sync commits,
+  and which changes a sync reports.
 - The full UI specification: layout, row composition, grouping and sort, stack
   treatment, keymap, colour usage.
 - Acceptance criteria concrete enough to check off.
