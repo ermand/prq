@@ -14,6 +14,16 @@ status, mergeable state, draft, age, and stack membership — each with a link I
 can open in the browser. GitHub-only in v1, behind a provider seam GitLab could
 later implement.
 
+**Widened 2026-08-07: the tool has memory.** It does not only answer "what is
+true now" but "what changed since I last looked" — new review requests, PRs
+pushed since I blocked them, silent retargets, PRs that have left the set. That
+requires durable state across runs, which is why the store is SQLite rather than
+the JSON cache it replaces: a pure cache would not justify a database, and at a
+0.8s scan would barely justify existing. It also closes a gap the map already
+documented as impossible — *The shape of the GitHub Pull Request Stacks API*
+found that automatic retargeting is invisible to the API and can only be seen by
+diffing against a prior scan.
+
 ## Notes
 
 - **Domain**: developer tooling / terminal UI over the GitHub API via `gh`.
@@ -92,6 +102,15 @@ later implement.
 
 ## Not yet specified
 
+- **The SQLite state store.** Destination widened 2026-08-07 and the store is
+  decided in principle, but the ticket set is not yet cut. It hangs on one
+  unanswered question: **what "since I last looked" means** — since the last
+  scan, since the last run, per-PR read/unread, or explicit acknowledgement.
+  That answer decides the schema, so nothing downstream can be phrased sharply
+  yet. Suspected tickets once it lands: what a snapshot is and how long it is
+  kept; which axes count as "changed"; schema and migration policy for rows
+  written by older code; how change surfaces in the UI. `bun:sqlite` is built in
+  (SQLite 3.51.0, `json1` available), so no dependency decision is needed.
 - **Degraded and error states.** The failure surface shrank with the scan design —
   two cheap queries, either of which can return an HTML 502 that will not parse as
   JSON, or an HTTP 200 carrying partial `data` plus a per-field `errors[]` array.
