@@ -15,11 +15,7 @@ export const APP_NAME = "prq";
 
 export interface Config {
   repos: string[];
-  /** How long a cached scan stays fresh. */
-  cacheTtlMinutes: number;
 }
-
-export const DEFAULT_TTL_MINUTES = 15;
 
 export function configPath(env: NodeJS.ProcessEnv = process.env): string {
   const base = env.XDG_CONFIG_HOME || join(homedir(), ".config");
@@ -30,9 +26,6 @@ export const EXAMPLE_CONFIG = `# ${APP_NAME} — repositories to scan
 repos:
   - owner/repo
   - owner/another-repo
-
-# How long a scan stays fresh before it is refetched.
-cacheTtlMinutes: ${DEFAULT_TTL_MINUTES}
 `;
 
 /**
@@ -46,7 +39,7 @@ export function parseConfig(text: string): Config {
     throw new Error("config must be a YAML mapping with a `repos:` key");
   }
 
-  const { repos, cacheTtlMinutes } = doc as Record<string, unknown>;
+  const { repos } = doc as Record<string, unknown>;
 
   if (!Array.isArray(repos) || repos.length === 0) {
     throw new Error("`repos` must be a non-empty list of owner/name entries");
@@ -59,18 +52,10 @@ export function parseConfig(text: string): Config {
     );
   }
 
-  const deduped = [...new Set(repos as string[])];
-
-  if (cacheTtlMinutes !== undefined) {
-    if (typeof cacheTtlMinutes !== "number" || !Number.isFinite(cacheTtlMinutes) || cacheTtlMinutes < 0) {
-      throw new Error("`cacheTtlMinutes` must be a non-negative number");
-    }
-  }
-
-  return {
-    repos: deduped,
-    cacheTtlMinutes: (cacheTtlMinutes as number | undefined) ?? DEFAULT_TTL_MINUTES,
-  };
+  // A TTL used to live here. Sync is now an explicit act, so there is nothing
+  // to expire: the store holds the last synced state until the driver asks for
+  // another one.
+  return { repos: [...new Set(repos as string[])] };
 }
 
 export async function loadConfig(path = configPath()): Promise<Config> {

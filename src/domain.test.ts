@@ -19,7 +19,7 @@ import {
 } from "./domain";
 
 const VIEWER = "ermand";
-const HEAD = "headsha";
+const HEAD = "a".repeat(40);
 
 function review(
   login: string,
@@ -39,6 +39,7 @@ function raw(over: Partial<RawPullRequest> = {}): RawPullRequest {
     createdAt: "2026-01-01T00:00:00Z",
     updatedAt: "2026-01-02T00:00:00Z",
     headRefOid: HEAD,
+    baseRefName: "main",
     mergeable: "MERGEABLE",
     reviewDecision: "REVIEW_REQUIRED",
     author: { login: "someone" },

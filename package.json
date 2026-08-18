@@ -7,6 +7,7 @@
   "bin": { "prq": "src/cli.ts" },
   "scripts": {
     "start": "bun src/cli.ts",
+    "sync": "bun src/cli.ts sync",
     "scan": "bun src/scan-cli.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit",

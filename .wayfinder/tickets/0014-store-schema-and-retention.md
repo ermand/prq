@@ -42,3 +42,33 @@ exactly is stored, keyed how, and what is thrown away?
 
 Note what the store replaces: the 15-minute JSON cache. Say plainly whether a TTL
 survives at all, given sync is now explicit.
+
+## Implemented as a prototype — 2026-08-07
+
+`/implement` was invoked before this ticket resolved, so `src/store.ts` now
+embodies one answer. **The ticket stays open**: the code is a position to react
+to, not the decision.
+
+What it does today:
+
+- **Current state plus an append-only change log**, not a row per PR per sync.
+  Three tables: `sync` (one row per sync), `pr` (current state, replaced
+  wholesale each sync), `change` (keyed `sync_id, pr_id, kind`).
+- **The GraphQL node id is the primary key**, as suspected.
+- **The derived model is stored**, serialised as JSON in `pr.payload` — not the
+  raw API response. Queryable via `json_extract` if wanted; costs a schema
+  version, which is `PRAGMA user_version`.
+- **The diff is persisted**, so the UI reads a result rather than recomputing.
+- **No retention or pruning at all.** The `change` table grows without bound.
+  This is the sharpest thing left open here.
+- **Migration**: freshness is detected by table presence, not by `user_version`,
+  because the pragma defaults to 0 and so cannot distinguish a new file from a
+  pre-versioning one. On a version mismatch the `pr` table is dropped and
+  history is kept, forcing the next sync to reset the baseline.
+- **A TTL no longer exists.** `cacheTtlMinutes` was removed from the config
+  entirely; sync is explicit, so there is nothing to expire.
+
+Still genuinely undecided: whether to keep more than one generation, retention
+and pruning, whether the raw response should be stored alongside the derived
+model, and what happens on a second sync in a row (today the previous diff is
+simply replaced and lost).

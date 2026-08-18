@@ -40,6 +40,7 @@ export interface RawPullRequest {
   createdAt: string;
   updatedAt: string;
   headRefOid: string;
+  baseRefName: string;
   mergeable: string | null;
   reviewDecision: string | null;
   author: { login: string } | null;
@@ -65,6 +66,10 @@ export interface PullRequest {
   author: string;
   createdAt: string;
   updatedAt: string;
+  /** Head commit. A change between syncs is a push. */
+  headOid: string;
+  /** Base branch. A change between syncs is a retarget, which the API never marks. */
+  baseRef: string;
   draft: boolean;
   verdict: Verdict;
   standing: Standing;
@@ -197,6 +202,8 @@ export function normalize(pr: RawPullRequest, viewer: string): PullRequest {
     author: sanitize(pr.author?.login ?? "ghost"),
     createdAt: pr.createdAt,
     updatedAt: pr.updatedAt,
+    headOid: pr.headRefOid,
+    baseRef: sanitize(pr.baseRefName),
     draft: pr.isDraft,
     verdict: toVerdict(pr.reviewDecision),
     standing: standingOf(pr, viewer),
@@ -342,18 +349,33 @@ const MERGE_STATES: Record<MergeState, true> = {
  * reachable by any process that can write one file in $HOME, and its `url`
  * reaches both `open` and an OSC 8 escape sequence.
  */
+/** Git object ids only; `headOid` is rendered and compared, never executed. */
+const OID = /^[0-9a-f]{0,64}$/;
+
+/**
+ * A string that survived sanitisation unchanged. This is the same fixed-point
+ * test `url` uses, and it is what makes the check a real trust boundary rather
+ * than a type assertion: sanitisation lives in `normalize`, and anything read
+ * back off disk never passes through `normalize`.
+ */
+const isClean = (value: unknown): value is string =>
+  typeof value === "string" && sanitize(value) === value;
+
 export function isPullRequest(value: unknown): value is PullRequest {
   if (value === null || typeof value !== "object") return false;
   const pr = value as Record<string, unknown>;
   return (
     typeof pr.id === "string" &&
     typeof pr.number === "number" &&
-    typeof pr.title === "string" &&
+    isClean(pr.title) &&
     (pr.url === null || (typeof pr.url === "string" && safeUrl(pr.url) === pr.url)) &&
-    typeof pr.repo === "string" &&
-    typeof pr.author === "string" &&
+    isClean(pr.repo) &&
+    isClean(pr.author) &&
     typeof pr.createdAt === "string" &&
     typeof pr.updatedAt === "string" &&
+    typeof pr.headOid === "string" &&
+    OID.test(pr.headOid) &&
+    isClean(pr.baseRef) &&
     typeof pr.draft === "boolean" &&
     typeof pr.staleBlock === "boolean" &&
     typeof pr.viaCodeOwners === "boolean" &&

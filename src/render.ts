@@ -18,6 +18,10 @@ export interface ViewState {
   filter: string;
   /** Show only members of this stack, by stack number. */
   stackFocus: number | null;
+  /** Show only PRs that moved in the last sync. */
+  changedOnly: boolean;
+  /** Ids that moved in the last sync; consulted when `changedOnly` is set. */
+  changedIds: ReadonlySet<string>;
 }
 
 export function matchesFilter(pr: PullRequest, filter: string): boolean {
@@ -35,7 +39,8 @@ export function visiblePrs(state: ViewState): PullRequest[] {
   return state.prs.filter(
     (pr) =>
       matchesFilter(pr, state.filter) &&
-      (state.stackFocus === null || pr.stack?.number === state.stackFocus),
+      (state.stackFocus === null || pr.stack?.number === state.stackFocus) &&
+      (!state.changedOnly || state.changedIds.has(pr.id)),
   );
 }
 
@@ -127,17 +132,41 @@ export function formatRow(
 export function statusLine(
   state: ViewState,
   rowCount: number,
-  extras: { viewer: string; repos: number; age: string; partial: boolean },
+  extras: {
+    viewer: string;
+    repos: number;
+    age: string;
+    partial: boolean;
+    /** Changed PRs that have a row to show. */
+    changeCount: number;
+    /** Changed PRs that have left the set, and so have no row. */
+    goneCount: number;
+    baselineReset: boolean;
+  },
 ): string {
   const parts = [
-    extras.viewer,
+    extras.viewer || "not synced",
     `${rowCount} PR${rowCount === 1 ? "" : "s"}`,
     `${extras.repos} repo${extras.repos === 1 ? "" : "s"}`,
     extras.age,
   ];
+  if (extras.changeCount > 0) {
+    parts.push(`${extras.changeCount} changed`);
+  }
+  if (extras.goneCount > 0) {
+    // Never folded into `changeCount`: these have no row, so promising them in
+    // the same number the changed-only filter narrows to would be a lie.
+    parts.push(`${extras.goneCount} gone`);
+  }
+  if (extras.changeCount === 0 && extras.goneCount === 0 && extras.baselineReset) {
+    // A first sync has no predecessor, so "0 changed" would imply nothing moved
+    // when the truth is that nothing could be compared.
+    parts.push("baseline set");
+  }
   if (!state.grouped) parts.push("flat");
+  if (state.changedOnly) parts.push("changed only");
   if (state.stackFocus !== null) parts.push(`stack ${state.stackFocus}`);
   if (state.filter !== "") parts.push(`/${state.filter}`);
-  if (extras.partial) parts.push("INCOMPLETE");
+  if (extras.partial) parts.push("INCOMPLETE — not committed");
   return parts.join(" · ");
 }

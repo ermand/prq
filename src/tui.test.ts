@@ -13,7 +13,8 @@ function pr(over: Partial<PullRequest> = {}): PullRequest {
       isDraft: false,
       createdAt: "2026-01-01T00:00:00Z",
       updatedAt: "2026-01-01T00:00:00Z",
-      headRefOid: "h",
+      headRefOid: "0".repeat(40),
+      baseRefName: "main",
       mergeable: "MERGEABLE",
       reviewDecision: "REVIEW_REQUIRED",
       author: { login: "alice" },
@@ -34,16 +35,18 @@ function pr(over: Partial<PullRequest> = {}): PullRequest {
 function options(over: Partial<AppOptions> = {}): AppOptions {
   return {
     prs: [],
+    changes: [],
     viewer: "ermand",
     repos: ["org/repo"],
-    fetchedAt: new Date(),
-    partial: false,
-    failures: [],
-    refresh: async () => ({
+    lastSync: new Date(),
+    baselineReset: false,
+    sync: async () => ({
       prs: [],
-      partial: false,
+      changes: [],
       failures: [],
-      fetchedAt: new Date(),
+      at: new Date(),
+      viewer: "ermand",
+      baselineReset: false,
     }),
     ...over,
   };
@@ -107,15 +110,42 @@ describe("the painted dashboard", () => {
     h.renderer.destroy();
   });
 
-  test("announces an incomplete scan loudly", async () => {
+  test("says nothing has ever been synced", async () => {
+    const h = await paint({ lastSync: null, viewer: "" });
+    const frame = h.captureCharFrame();
+    expect(frame).toInclude("not synced");
+    expect(frame).toInclude("never synced");
+    h.renderer.destroy();
+  });
+
+  test("a first sync reads as baseline set, not as nothing changed", async () => {
+    const h = await paint({ baselineReset: true, prs: [pr({ standing: "awaiting-me" })] });
+    expect(h.captureCharFrame()).toInclude("baseline set");
+    h.renderer.destroy();
+  });
+
+  test("marks a changed row and counts it", async () => {
     const h = await paint({
-      prs: [pr({ standing: "awaiting-me" })],
-      partial: true,
-      failures: ["review-requested:@me: GitHub returned 502"],
+      prs: [pr({ id: "PR_1", standing: "awaiting-me", title: "moved one" })],
+      changes: [{ prId: "PR_1", kind: "retargeted", from: "a", to: "b" }],
     });
     const frame = h.captureCharFrame();
-    expect(frame).toInclude("INCOMPLETE");
-    expect(frame).toInclude("502");
+    expect(frame).toInclude("retargeted");
+    expect(frame).toInclude("1 changed");
+    h.renderer.destroy();
+  });
+
+  test("shows only the most significant change per row", async () => {
+    const h = await paint({
+      prs: [pr({ id: "PR_1", standing: "awaiting-me" })],
+      changes: [
+        { prId: "PR_1", kind: "bucket", from: "7", to: "1" },
+        { prId: "PR_1", kind: "review-requested", from: "x", to: "y" },
+      ],
+    });
+    const frame = h.captureCharFrame();
+    expect(frame).toInclude("asked");
+    expect(frame).not.toInclude("moved");
     h.renderer.destroy();
   });
 
@@ -232,7 +262,8 @@ describe("hostile data", () => {
         isDraft: false,
         createdAt: "2026-01-01T00:00:00Z",
         updatedAt: "2026-01-01T00:00:00Z",
-        headRefOid: "h",
+        headRefOid: "0".repeat(40),
+        baseRefName: "main",
         mergeable: "MERGEABLE",
         reviewDecision: "REVIEW_REQUIRED",
         author: { login: "alice" },
@@ -254,6 +285,124 @@ describe("hostile data", () => {
     expect(frame).toInclude("ermand");
     expect(frame).toInclude("innocent row");
     expect(frame).toInclude("q quit");
+    h.renderer.destroy();
+  });
+});
+
+describe("sync", () => {
+  test("S syncs and reports the change count", async () => {
+    const h = await paint({
+      prs: [pr({ id: "PR_1", standing: "awaiting-me" })],
+      sync: async () => ({
+        prs: [pr({ id: "PR_1", standing: "awaiting-me", checks: "failing" })],
+        changes: [{ prId: "PR_1", kind: "checks", from: "success", to: "failing" }],
+        failures: [],
+        at: new Date(),
+        viewer: "ermand",
+        baselineReset: false,
+      }),
+    });
+    h.mockInput.pressKey("S");
+    await h.renderOnce();
+    await h.renderOnce();
+    const frame = h.captureCharFrame();
+    expect(frame).toInclude("1 PR changed");
+    expect(frame).toInclude("1 changed");
+    h.renderer.destroy();
+  });
+
+  test("lowercase s does not sync", async () => {
+    // Sync is deliberate; it must not share a keystroke with navigation.
+    let called = false;
+    const h = await paint({
+      prs: [pr({ standing: "awaiting-me" })],
+      sync: async () => {
+        called = true;
+        return {
+          prs: [],
+          changes: [],
+          failures: [],
+          at: new Date(),
+          viewer: "ermand",
+          baselineReset: false,
+        };
+      },
+    });
+    h.mockInput.pressKey("s");
+    await h.renderOnce();
+    expect(called).toBe(false);
+    h.renderer.destroy();
+  });
+
+  test("a partial sync says it was not committed", async () => {
+    const h = await paint({
+      prs: [pr({ standing: "awaiting-me" })],
+      sync: async () => ({
+        prs: [pr({ standing: "awaiting-me" })],
+        changes: [],
+        failures: ["review-requested:@me: GitHub returned 502"],
+        at: new Date(),
+        viewer: "ermand",
+        baselineReset: false,
+      }),
+    });
+    h.mockInput.pressKey("S");
+    await h.renderOnce();
+    await h.renderOnce();
+    const frame = h.captureCharFrame();
+    expect(frame).toInclude("INCOMPLETE");
+    expect(frame).toInclude("502");
+    expect(frame).toInclude("baseline unchanged");
+    h.renderer.destroy();
+  });
+
+  test("a failed sync leaves the shown state alone", async () => {
+    const h = await paint({
+      prs: [pr({ standing: "awaiting-me", title: "still here" })],
+      sync: async () => {
+        throw new Error("network down");
+      },
+    });
+    h.mockInput.pressKey("S");
+    await h.renderOnce();
+    await h.renderOnce();
+    const frame = h.captureCharFrame();
+    expect(frame).toInclude("still here");
+    expect(frame).toInclude("sync failed");
+    h.renderer.destroy();
+  });
+});
+
+describe("the changed filter", () => {
+  test("c narrows to PRs that moved, and toggles back", async () => {
+    const h = await paint({
+      prs: [
+        pr({ id: "PR_1", standing: "awaiting-me", title: "moved one" }),
+        pr({ id: "PR_2", number: 2, standing: "awaiting-me", title: "still one" }),
+      ],
+      changes: [{ prId: "PR_1", kind: "checks", from: "success", to: "failing" }],
+    });
+    h.mockInput.pressKey("c");
+    await h.renderOnce();
+    let frame = h.captureCharFrame();
+    expect(frame).toInclude("moved one");
+    expect(frame).not.toInclude("still one");
+    expect(frame).toInclude("changed only");
+
+    h.mockInput.pressKey("c");
+    await h.renderOnce();
+    frame = h.captureCharFrame();
+    expect(frame).toInclude("still one");
+    h.renderer.destroy();
+  });
+
+  test("c says so when nothing changed rather than emptying the list", async () => {
+    const h = await paint({ prs: [pr({ standing: "awaiting-me", title: "here" })] });
+    h.mockInput.pressKey("c");
+    await h.renderOnce();
+    const frame = h.captureCharFrame();
+    expect(frame).toInclude("nothing changed");
+    expect(frame).toInclude("here");
     h.renderer.destroy();
   });
 });

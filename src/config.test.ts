@@ -1,12 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import {
-  configPath,
-  DEFAULT_TTL_MINUTES,
-  EXAMPLE_CONFIG,
-  loadConfig,
-  parseConfig,
-} from "./config";
+import { configPath, EXAMPLE_CONFIG, loadConfig, parseConfig } from "./config";
 
 describe("configPath", () => {
   test("honours XDG_CONFIG_HOME", () => {
@@ -23,15 +17,14 @@ describe("configPath", () => {
 });
 
 describe("parseConfig", () => {
-  test("reads a repo list and defaults the TTL", () => {
-    const c = parseConfig("repos:\n  - o/a\n  - o/b\n");
-    expect(c.repos).toEqual(["o/a", "o/b"]);
-    expect(c.cacheTtlMinutes).toBe(DEFAULT_TTL_MINUTES);
+  test("reads a repo list", () => {
+    expect(parseConfig("repos:\n  - o/a\n  - o/b\n").repos).toEqual(["o/a", "o/b"]);
   });
 
-  test("honours an explicit TTL, including zero", () => {
-    expect(parseConfig("repos: [o/a]\ncacheTtlMinutes: 0").cacheTtlMinutes).toBe(0);
-    expect(parseConfig("repos: [o/a]\ncacheTtlMinutes: 60").cacheTtlMinutes).toBe(60);
+  test("ignores a TTL that older configs may still carry", () => {
+    // The TTL was removed when sync became explicit; an old config must not
+    // start failing because of a key that no longer means anything.
+    expect(parseConfig("repos: [o/a]\ncacheTtlMinutes: 15").repos).toEqual(["o/a"]);
   });
 
   test("deduplicates repeated repos", () => {
@@ -59,13 +52,6 @@ describe("parseConfig", () => {
   test("rejects a non-mapping document", () => {
     expect(() => parseConfig("- o/a")).toThrow(/YAML mapping/);
     expect(() => parseConfig("")).toThrow(/YAML mapping/);
-  });
-
-  test("rejects a nonsense TTL", () => {
-    expect(() => parseConfig("repos: [o/a]\ncacheTtlMinutes: -1")).toThrow(/non-negative/);
-    expect(() => parseConfig("repos: [o/a]\ncacheTtlMinutes: soon")).toThrow(
-      /non-negative/,
-    );
   });
 
   test("the shipped example parses", () => {

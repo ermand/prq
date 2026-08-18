@@ -39,3 +39,34 @@ Sync is explicit and on demand. Pin down what that means at every entry point.
 This ticket absorbs the launch-behaviour and staleness-display questions
 originally posed in [0009](./0009-refresh-and-caching.md); that ticket now covers
 only failure handling and retry.
+
+## Implemented as a prototype — 2026-08-07
+
+**The ticket stays open.** What the code does today:
+
+- **Launch reads the store and touches no network.** The header shows the age of
+  the last sync, or `never synced` when the store is empty, and the viewer reads
+  `not synced` rather than a stale login.
+- **First run shows nothing and says so** rather than syncing implicitly. Nothing
+  is reported as new: the sync is marked `baselineReset` and the header reads
+  `baseline set` instead of `0 changed`, because "0 changed" would claim nothing
+  moved when the truth is nothing was comparable.
+- **`S` syncs; lowercase `s` still focuses a stack.** Sync deliberately does not
+  share a keystroke with a navigation action. `r` is gone — there is no longer
+  anything that merely re-reads.
+- **A second `S` while a sync is in flight cancels it**, and the notice says the
+  baseline is unchanged.
+- **A partial sync is shown but never committed.** `performSync` returns the
+  fetched PRs with the failure list and skips `Store.commit` entirely, so the
+  previous baseline survives. The header reads `INCOMPLETE — not committed`.
+- **A failed sync leaves the displayed state alone** and reports the error in the
+  footer.
+- **No automatic sync exists anywhere** — no timer, no launch trigger, no
+  age threshold.
+- **`prq sync`** does the same headlessly and exits non-zero on a partial sync.
+
+Still open: whether adding a repo to the config should force or invalidate
+anything (today it is simply reflected at the next sync, and the stored
+`sync.repos` records the scope each sync covered but is not yet compared), and
+whether the empty-store first run should offer to sync rather than merely
+instructing.

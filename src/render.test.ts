@@ -21,7 +21,8 @@ function pr(over: Partial<PullRequest> = {}): PullRequest {
       isDraft: false,
       createdAt: "2026-01-01T00:00:00Z",
       updatedAt: "2026-01-01T00:00:00Z",
-      headRefOid: "h",
+      headRefOid: "0".repeat(40),
+      baseRefName: "main",
       mergeable: "MERGEABLE",
       reviewDecision: "REVIEW_REQUIRED",
       author: { login: "alice" },
@@ -40,8 +41,27 @@ function pr(over: Partial<PullRequest> = {}): PullRequest {
 }
 
 function state(over: Partial<ViewState> = {}): ViewState {
-  return { prs: [], grouped: true, filter: "", stackFocus: null, ...over };
+  return {
+    prs: [],
+    grouped: true,
+    filter: "",
+    stackFocus: null,
+    changedOnly: false,
+    changedIds: new Set(),
+    ...over,
+  };
 }
+
+const extras = (over: Partial<Parameters<typeof statusLine>[2]> = {}) => ({
+  viewer: "ermand",
+  repos: 3,
+  age: "just now",
+  partial: false,
+  changeCount: 0,
+  goneCount: 0,
+  baselineReset: false,
+  ...over,
+});
 
 describe("matchesFilter", () => {
   test("an empty filter matches everything", () => {
@@ -176,29 +196,67 @@ describe("formatRow", () => {
 });
 
 describe("statusLine", () => {
-  const extras = { viewer: "ermand", repos: 3, age: "just now", partial: false };
-
   test("reports viewer, counts and age", () => {
-    expect(statusLine(state(), 5, extras)).toBe("ermand · 5 PRs · 3 repos · just now");
+    expect(statusLine(state(), 5, extras())).toBe("ermand · 5 PRs · 3 repos · just now");
+  });
+
+  test("says so when nothing has ever been synced", () => {
+    expect(statusLine(state(), 0, extras({ viewer: "" }))).toStartWith("not synced");
   });
 
   test("singularises one PR and one repo", () => {
-    expect(statusLine(state(), 1, { ...extras, repos: 1 })).toInclude("1 PR · 1 repo ·");
+    expect(statusLine(state(), 1, extras({ repos: 1 }))).toInclude("1 PR · 1 repo ·");
   });
 
-  test("announces an incomplete scan", () => {
-    // A half-union must never read as whole.
-    expect(statusLine(state(), 5, { ...extras, partial: true })).toInclude("INCOMPLETE");
+  test("announces an incomplete scan and that it was not committed", () => {
+    // A half-union must never read as whole, and must never become a baseline.
+    const line = statusLine(state(), 5, extras({ partial: true }));
+    expect(line).toInclude("INCOMPLETE");
+    expect(line).toInclude("not committed");
+  });
+
+  test("reports how many PRs changed", () => {
+    expect(statusLine(state(), 5, extras({ changeCount: 3 }))).toInclude("3 changed");
+  });
+
+  test("a first sync says baseline set, not zero changed", () => {
+    // "0 changed" would imply nothing moved; the truth is nothing was comparable.
+    const line = statusLine(state(), 5, extras({ changeCount: 0, baselineReset: true }));
+    expect(line).toInclude("baseline set");
+    expect(line).not.toInclude("0 changed");
+  });
+
+  test("a real change count wins over the baseline note", () => {
+    const line = statusLine(state(), 5, extras({ changeCount: 2, baselineReset: true }));
+    expect(line).toInclude("2 changed");
+    expect(line).not.toInclude("baseline set");
   });
 
   test("shows active modes", () => {
     const line = statusLine(
-      state({ grouped: false, filter: "auth", stackFocus: 12 }),
+      state({ grouped: false, filter: "auth", stackFocus: 12, changedOnly: true }),
       5,
-      extras,
+      extras(),
     );
     expect(line).toInclude("flat");
+    expect(line).toInclude("changed only");
     expect(line).toInclude("stack 12");
     expect(line).toInclude("/auth");
+  });
+});
+
+describe("changedOnly", () => {
+  test("keeps only PRs that moved", () => {
+    const moved = pr({ id: "moved" });
+    const still = pr({ id: "still" });
+    const visible = visiblePrs(
+      state({ prs: [moved, still], changedOnly: true, changedIds: new Set(["moved"]) }),
+    );
+    expect(visible.map((p) => p.id)).toEqual(["moved"]);
+  });
+
+  test("is inert when off", () => {
+    const prs = [pr({ id: "a" }), pr({ id: "b", number: 2 })];
+    expect(visiblePrs(state({ prs, changedIds: new Set(["a"]) }))).toHaveLength(2);
   });
 });

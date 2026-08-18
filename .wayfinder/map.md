@@ -108,6 +108,24 @@ diffing against a prior scan.
   since a later comment masks a standing block. Also: `ReviewRequest` has no
   timestamp, and drafts can carry review requests.
 
+**The state store was built on 2026-08-07** while tickets 0014–0018 were still
+open, so each of them now carries an *Implemented as a prototype* section
+describing the position taken. Two spec-level facts came out of running it, and
+both belong here rather than in a ticket:
+
+- **Learning a previously unknown value is not a change, but the guard must be
+  directional.** `mergeable` resolves lazily, so a first sync of 29 real PRs
+  returned `UNKNOWN` for 19 and a second sync seconds later reported 19 spurious
+  transitions. Suppressing symmetrically then hid a genuine
+  `unknown → conflicted`, which is the ordinary shape of a real conflict because
+  `mergeable` returns to `UNKNOWN` whenever the base moves. The same applies to
+  `statusCheckRollup`, which is null until the first check run exists on the head
+  commit — so `checks: none` also means "pushed seconds ago", not only "no CI".
+- **28 of the driver's 29 PRs have no CI at all** (`checks: none`). That measured
+  distribution retroactively justifies the amendment to 0007 admitting `none`
+  into *Mine, ready to land*: without it, essentially every PR of the driver's
+  would be unable to reach that bucket.
+
 ## Not yet specified
 
 - **Storing review activity as a work history.** Beyond this tool — a durable,

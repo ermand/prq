@@ -9,7 +9,7 @@
 
 /** Every field the domain model needs, in one round trip. */
 export const PR_FIELDS = `
-  id number title url isDraft createdAt updatedAt headRefOid
+  id number title url isDraft createdAt updatedAt headRefOid baseRefName
   mergeable reviewDecision
   author { login }
   repository { nameWithOwner }

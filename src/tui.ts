@@ -32,6 +32,7 @@ import {
   type ViewState,
 } from "./render";
 import type { PullRequest } from "./domain";
+import { byPr, headline, label, type Change } from "./changes";
 
 const COLOR = {
   approved: "#7ee787",
@@ -41,6 +42,7 @@ const COLOR = {
   bucket: "#d2a8ff",
   cursor: "#1f6feb",
   warn: "#f0883e",
+  changed: "#d29922",
 } as const;
 
 const VERDICT_COLOR: Record<PullRequest["verdict"], string> = {
@@ -50,23 +52,29 @@ const VERDICT_COLOR: Record<PullRequest["verdict"], string> = {
   "review-optional": COLOR.optional,
 };
 
+export interface SyncedState {
+  prs: PullRequest[];
+  changes: Change[];
+  failures: string[];
+  at: Date;
+  viewer: string;
+  baselineReset: boolean;
+}
+
 export interface AppOptions {
   prs: PullRequest[];
+  /** Changes recorded by the last sync. Empty on a first run. */
+  changes: Change[];
   viewer: string;
   repos: string[];
-  fetchedAt: Date;
-  partial: boolean;
-  failures: string[];
-  refresh: (signal: AbortSignal) => Promise<{
-    prs: PullRequest[];
-    partial: boolean;
-    failures: string[];
-    fetchedAt: Date;
-  }>;
+  /** Null when nothing has ever been synced. */
+  lastSync: Date | null;
+  baselineReset: boolean;
+  sync: (signal: AbortSignal) => Promise<SyncedState>;
 }
 
 const HELP =
-  "j/k move · o open · y copy · s stack · g group · / filter · r refresh · ? help · q quit";
+  "j/k move · o open · y copy · s stack · c changed · g group · / filter · S sync · ? help · q quit";
 
 /**
  * Child processes get PATH and nothing else. `open` and `pbcopy` have no use
@@ -75,33 +83,52 @@ const HELP =
  */
 const SPAWN_ENV = { PATH: process.env.PATH ?? "" };
 
+/**
+ * Resolves when the dashboard is quit, so the caller's `finally` runs and the
+ * store is closed. Previously this resolved as soon as the first paint returned
+ * and `q` called `process.exit` from inside the keypress handler, so nothing
+ * ever closed the store and the WAL sidecars were always left behind.
+ */
 export async function runApp(options: AppOptions): Promise<void> {
-  const renderer = await createCliRenderer({ exitOnCtrlC: true });
+  const renderer = await createCliRenderer({ exitOnCtrlC: false });
   try {
-    mountApp(renderer, options);
-  } catch (error) {
-    // The first paint happens inside mountApp. Without this the terminal is
-    // left in raw mode on the alt screen with the cursor hidden.
+    await new Promise<void>((resolve) => {
+      mountApp(renderer, options, resolve);
+    });
+  } finally {
+    // Also covers a throw from the first paint, which happens inside mountApp:
+    // without this the terminal is left in raw mode on the alt screen.
     renderer.destroy();
-    throw error;
   }
 }
 
 /**
  * Mounts the dashboard onto a renderer. Split from `runApp` so tests can drive
  * it against the headless test renderer and assert the painted frame.
+ *
+ * `onQuit` lets the caller clean up rather than the handler calling
+ * `process.exit` and skipping every `finally` on the way out.
  */
-export function mountApp(renderer: CliRenderer, options: AppOptions): void {
-
+export function mountApp(
+  renderer: CliRenderer,
+  options: AppOptions,
+  onQuit: () => void = () => process.exit(0),
+): void {
   const view: ViewState = {
     prs: options.prs,
     grouped: true,
     filter: "",
     stackFocus: null,
+    changedOnly: false,
+    changedIds: new Set(options.changes.map((c) => c.prId)),
   };
-  let fetchedAt = options.fetchedAt;
-  let partial = options.partial;
-  let failures = options.failures;
+  let lastSync = options.lastSync;
+  let viewer = options.viewer;
+  // A committed sync was whole by construction — partial ones are never
+  // committed — so a launch read from the store starts with no failures.
+  let failures: string[] = [];
+  let baselineReset = options.baselineReset;
+  let changed = byPr(options.changes);
   let cursor = 0;
   let scroll = 0;
   let filtering = false;
@@ -127,6 +154,8 @@ export function mountApp(renderer: CliRenderer, options: AppOptions): void {
     }
     const { pr } = row;
     const seg = formatRow(pr, width);
+    const moved = changed.get(pr.id);
+    const mark = moved ? headline(moved) : undefined;
     return [
       selected ? fg(COLOR.cursor)("▸ ") : plain("  "),
       fg(VERDICT_COLOR[pr.verdict])(seg.badge),
@@ -136,6 +165,11 @@ export function mountApp(renderer: CliRenderer, options: AppOptions): void {
       pr.url === null ? dim(`${seg.ref} `) : dim(link(pr.url)(`${seg.ref} `)),
       pr.draft ? dim(seg.title) : plain(seg.title),
       plain("  "),
+      // Ticket 0017 is open: a marker on the row is the smallest treatment, and
+      // deliberately leaves the bucket structure untouched.
+      mark === undefined
+        ? plain("")
+        : fg(COLOR.changed)(`[${label(mark.kind)}] `),
       dim(seg.meta),
     ];
   };
@@ -153,14 +187,20 @@ export function mountApp(renderer: CliRenderer, options: AppOptions): void {
     if (cursorRow >= scroll + viewport) scroll = cursorRow - viewport + 1;
     scroll = Math.max(0, Math.min(scroll, Math.max(0, rows.length - viewport)));
 
-    const age = ageLabel(fetchedAt);
+    const present = new Set(view.prs.map((pr) => pr.id));
+    const goneCount = [...changed.keys()].filter((id) => !present.has(id)).length;
+    const age =
+      lastSync === null ? "never synced" : busy ? "syncing…" : ageLabel(lastSync);
     const headerChunks: TextChunk[] = [
       bold(
         statusLine(view, selectable.length, {
-          viewer: options.viewer,
+          viewer,
           repos: options.repos.length,
-          age: busy ? "scanning…" : age,
-          partial,
+          age,
+          partial: failures.length > 0,
+          changeCount: changed.size - goneCount,
+          goneCount,
+          baselineReset,
         }),
       ),
     ];
@@ -171,7 +211,9 @@ export function mountApp(renderer: CliRenderer, options: AppOptions): void {
 
     const body: TextChunk[] = [];
     if (rows.length === 0) {
-      body.push(dim(view.filter || view.stackFocus !== null ? "  nothing matches" : "  nothing to review"));
+      const filtered =
+        view.filter !== "" || view.stackFocus !== null || view.changedOnly;
+      body.push(dim(filtered ? "  nothing matches" : "  nothing to review"));
     }
     rows.slice(scroll, scroll + viewport).forEach((row, i) => {
       if (i > 0) body.push(plain("\n"));
@@ -195,27 +237,44 @@ export function mountApp(renderer: CliRenderer, options: AppOptions): void {
     return row?.kind === "pr" ? row.pr : null;
   }
 
-  async function refresh(): Promise<void> {
+  async function sync(): Promise<void> {
     if (busy) {
-      // A second `r` cancels the in-flight scan rather than being a no-op,
+      // A second press cancels the in-flight sync rather than being a no-op,
       // so a request stuck against a slow endpoint is escapable.
       inflight?.abort();
       return;
     }
-    // The cursor is an ordinal, and a refresh replaces the whole list — bucket
+    // The cursor is an ordinal, and a sync replaces the whole list — bucket
     // membership and sort both move on updatedAt. Pin to the PR under the
-    // cursor so `o` cannot open something the user never selected.
+    // cursor so `o` cannot open something the driver never selected.
     const pinned = currentPr()?.id ?? null;
-    inflight = new AbortController();
+    const controller = new AbortController();
+    inflight = controller;
     busy = true;
     notice = "";
     draw();
     try {
-      const next = await options.refresh(inflight.signal);
+      const next = await options.sync(controller.signal);
+      // Checked before the failure list: an abort that lands after one half has
+      // already resolved arrives as a partial result, not as an error.
+      if (controller.signal.aborted) {
+        notice = "sync cancelled — baseline unchanged";
+        return;
+      }
       view.prs = next.prs;
-      partial = next.partial;
       failures = next.failures;
-      fetchedAt = next.fetchedAt;
+      lastSync = next.at;
+      viewer = next.viewer;
+      baselineReset = next.baselineReset;
+      changed = byPr(next.changes);
+      view.changedIds = new Set(changed.keys());
+      if (next.failures.length > 0) {
+        notice = "sync incomplete — shown but not committed, baseline unchanged";
+      } else if (next.baselineReset) {
+        notice = "baseline set — the next sync will report what changed";
+      } else {
+        notice = `${changed.size} PR${changed.size === 1 ? "" : "s"} changed`;
+      }
       if (pinned !== null) {
         const rows = buildRows(view);
         const at = selectableIndices(rows).findIndex((i) => {
@@ -225,10 +284,11 @@ export function mountApp(renderer: CliRenderer, options: AppOptions): void {
         if (at >= 0) cursor = at;
       }
     } catch (error) {
-      notice =
-        (error as Error).name === "AbortError"
-          ? "refresh cancelled"
-          : `refresh failed: ${(error as Error).message}`;
+      // `scan` collapses a total failure into a GitHubError, discarding the
+      // AbortError identity — so the signal is the only reliable witness.
+      notice = controller.signal.aborted
+        ? "sync cancelled — baseline unchanged"
+        : `sync failed: ${(error as Error).message}`;
     } finally {
       inflight = null;
       busy = false;
@@ -257,9 +317,23 @@ export function mountApp(renderer: CliRenderer, options: AppOptions): void {
     switch (key.name) {
       case "q":
         inflight?.abort();
-        renderer.destroy();
-        process.exit(0);
+        // Hand control back rather than calling process.exit here, which would
+        // skip the caller's cleanup and leave the store open.
+        onQuit();
         return;
+      case "c":
+        if (key.ctrl) {
+          inflight?.abort();
+          onQuit();
+          return;
+        }
+        if (view.changedIds.size === 0) {
+          notice = "nothing changed in the last sync";
+          break;
+        }
+        view.changedOnly = !view.changedOnly;
+        cursor = 0;
+        break;
       case "j":
       case "down":
         cursor = Math.min(cursor + 1, Math.max(0, total - 1));
@@ -313,6 +387,12 @@ export function mountApp(renderer: CliRenderer, options: AppOptions): void {
         break;
       }
       case "s": {
+        // Uppercase S syncs; lowercase s focuses a stack. Sync is deliberate, so
+        // it does not share a keystroke with a navigation action.
+        if (key.shift) {
+          void sync();
+          return;
+        }
         if (view.stackFocus !== null) {
           view.stackFocus = null;
         } else {
@@ -335,13 +415,11 @@ export function mountApp(renderer: CliRenderer, options: AppOptions): void {
       case "escape":
         view.filter = "";
         view.stackFocus = null;
+        view.changedOnly = false;
         showHelp = false;
         notice = "";
         cursor = 0;
         break;
-      case "r":
-        void refresh();
-        return;
       case "?":
         showHelp = !showHelp;
         break;
