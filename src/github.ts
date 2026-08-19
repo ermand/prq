@@ -9,6 +9,7 @@
 
 import { normalize, sanitize, type PullRequest, type RawPullRequest } from "./domain";
 import { buildSearchQuery, SCAN_FILTERS, SCAN_QUERY, type ScanFilter } from "./query";
+import type { ProviderClient, ProviderScan } from "./providers";
 
 const ENDPOINT = "https://api.github.com/graphql";
 const PAGE_SIZE = 100;
@@ -213,3 +214,14 @@ export async function scan(
     remaining: Number.isFinite(remaining) ? remaining : 0,
   };
 }
+
+/** The GitHub half of the provider seam. `scan` above stays the implementation. */
+export const github: ProviderClient = {
+  provider: "github",
+  token: githubToken,
+  async scan(projects, token, signal): Promise<ProviderScan> {
+    if (projects.length === 0) return { rows: [], failed: [], viewer: "" };
+    const result = await scan(projects, token, signal);
+    return { rows: result.prs, failed: result.failures, viewer: result.viewer };
+  },
+};

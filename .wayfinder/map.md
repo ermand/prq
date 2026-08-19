@@ -185,8 +185,40 @@ both belong here rather than in a ticket:
   path it cannot see** — HTTP 200, no error — so the scan must diff requested
   against returned paths and treat a missing one as a provider failure, or a typo
   reads as "no open MRs". `repos:` is retired loudly, not aliased.
+- [How GitLab states map onto the taxonomy](./tickets/0021-gitlab-state-mapping.md)
+  — **every axis is fillable; none is provider-unsupported.** The buckets are
+  identical across providers and confidence rides on the row, not the provider.
+  GitLab reaches `changes-requested` two ways — `changeRequesters` on paid projects
+  and the reviewer's own `REQUESTED_CHANGES` state everywhere, which is what makes
+  bucket 2 work on the driver's free-tier projects. `staleBlock` is reconstructed
+  from the reviewer's timestamp against the newest diff, so `approximate`, and
+  `null` where GitLab records no timestamp; `null` resolves *toward* action rather
+  than away. A row shows its provider as a `gl:` prefix on the last path segment,
+  because GitLab paths nest and a project at `evil/facebook/react` would otherwise
+  render identically to the GitHub repo. Change axes needed per-provider
+  suppression: `diffHeadSha` and `staleBlock` both fill in lazily and both fired
+  spurious reports — the fourth and fifth lazily-computed fields caught by the same
+  trap, which is now a pattern rather than a series of accidents.
+- **A GitLab scan cannot filter by involvement server-side, so its breadth is the
+  whole project** — and the complexity ceiling caps one page at 50 MRs. Found by
+  review, verified live: `gitlab-org/gitlab` has 3068 open MRs and the scan
+  returned 8 rows with no failure, which would have committed as a complete
+  baseline and then churned rows out as spurious `left` as the newest-first window
+  slid. Truncation is now detected from `count` and `pageInfo.hasNextPage` and
+  reported as a provider failure. Cursor paging is unbuilt; detection is the
+  invariant. Separately, that project's rich selection **times out server-side** —
+  GitLab answers HTTP 200 with 51 `errors[]` entries and partial data, which the
+  scan refuses rather than committing.
 
 ## Not yet specified
+
+- **Cursor paging, and what a project too big to scan means.** Truncation is now
+  detected and reported, which is the invariant; actually fetching past 50 is not
+  built. Two separate walls: the 250-complexity ceiling caps one page, and
+  `gitlab-org/gitlab` times out server-side on the rich selection regardless of
+  page size. So paging alone may not be enough — a project of that size may need a
+  thinner field set, or may simply not belong on a personal review board. Not
+  sharp enough to ticket until someone wants to track a project that large.
 
 - **Storing review activity as a work history.** Beyond this tool — a durable,
   queryable record of review activity over time, feeding things that are not this

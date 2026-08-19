@@ -56,8 +56,53 @@ export interface RawPullRequest {
   };
 }
 
+export type Provider = "github" | "gitlab";
+
+/**
+ * How well a provider filled a field.
+ *
+ * Rides on the row, never inferred from the provider: capability is
+ * per-*project*. A blocking review is reportable on a paid GitLab project and
+ * invisible on a free one, inside a single scan.
+ */
+export type Precision = "exact" | "approximate";
+
+/**
+ * A changes-request of mine that no longer describes the head.
+ *
+ * `null` when the provider cannot tell. GitHub answers exactly, by comparing the
+ * reviewed commit against the head. GitLab attaches no commit to a review state,
+ * so it compares timestamps instead and is undecidable when the review carries no
+ * timestamp — 20% of its blocking cohort when measured.
+ */
+export interface StaleBlock {
+  value: boolean;
+  precision: Precision;
+}
+
+/**
+ * One stack a PR belongs to.
+ *
+ * Plural on the model because GitLab membership is a *path*, not a partition —
+ * one MR can sit in several stacks at once. `precision` is `approximate` on
+ * GitLab because it counts only open layers and so cannot express a partly-landed
+ * `5/6`.
+ *
+ * `id` is the focus key, so it must be unique across the whole board, not just
+ * within one repository: GitHub's stack numbers restart per repo, so they are
+ * namespaced by it. GitLab has no stack identity, so the bottom member's node id
+ * stands in — already globally unique.
+ */
+export interface StackMembership {
+  id: string;
+  size: number;
+  position: number;
+  precision: Precision;
+}
+
 export interface PullRequest {
   id: string;
+  provider: Provider;
   number: number;
   title: string;
   /** Validated https URL, or null when the API handed us something else. */
@@ -75,13 +120,12 @@ export interface PullRequest {
   standing: Standing;
   checks: Checks;
   merge: MergeState;
-  /** My changes-request no longer describes the head commit. */
-  staleBlock: boolean;
+  staleBlock: StaleBlock | null;
   /** The review request reached me via CODEOWNERS rather than by name. */
   viaCodeOwners: boolean;
   /** Opinionated reviews by anyone other than the viewer. */
   otherReviews: number;
-  stack: { number: number; size: number; position: number } | null;
+  stacks: StackMembership[];
 }
 
 /**
@@ -201,19 +245,26 @@ export function standingOf(pr: RawPullRequest, viewer: string): Standing {
   return "not-involved";
 }
 
-export function isStaleBlock(pr: RawPullRequest, viewer: string): boolean {
+/**
+ * GitHub answers this exactly: the reviewed commit is on the record, so it can be
+ * compared with the head. `null` is never returned here — only GitLab, which
+ * attaches no commit to a review state, has to say "cannot tell".
+ */
+export function isStaleBlock(pr: RawPullRequest, viewer: string): StaleBlock | null {
   const opinion = viewerOpinion(pr, viewer);
-  if (opinion?.state !== "CHANGES_REQUESTED") return false;
+  if (opinion?.state !== "CHANGES_REQUESTED") return null;
   // A null commit means the reviewed commit is gone — almost always a force
   // push, which is exactly the stale case. Resolving it the other way would
   // hide the most actionable state on the board inside "nothing has happened".
-  return opinion.commit === null || opinion.commit.oid !== pr.headRefOid;
+  const moved = opinion.commit === null || opinion.commit.oid !== pr.headRefOid;
+  return { value: moved, precision: "exact" };
 }
 
 export function normalize(pr: RawPullRequest, viewer: string): PullRequest {
   const opinionated = pr.latestOpinionatedReviews?.nodes ?? [];
   return {
     id: pr.id,
+    provider: "github",
     number: pr.number,
     title: sanitize(pr.title),
     url: safeUrl(pr.url),
@@ -221,7 +272,11 @@ export function normalize(pr: RawPullRequest, viewer: string): PullRequest {
     author: sanitize(pr.author?.login ?? "ghost"),
     createdAt: canonicalTime(pr.createdAt),
     updatedAt: canonicalTime(pr.updatedAt),
-    headOid: pr.headRefOid,
+    // Validated at the producer so it agrees with `isPullRequest` by construction.
+    // A row whose oid the validator would reject is silently dropped on the next
+    // read, which flags the whole provider incomplete and resets its baseline —
+    // far out of proportion to one odd sha.
+    headOid: OID.test(pr.headRefOid) ? pr.headRefOid : "",
     baseRef: sanitize(pr.baseRefName),
     draft: pr.isDraft,
     verdict: toVerdict(pr.reviewDecision),
@@ -231,14 +286,21 @@ export function normalize(pr: RawPullRequest, viewer: string): PullRequest {
     staleBlock: isStaleBlock(pr, viewer),
     viaCodeOwners: pr.viewerLatestReviewRequest?.asCodeOwner === true,
     otherReviews: opinionated.filter((r) => r.author?.login !== viewer).length,
-    stack:
+    // GitHub membership is a partition, so at most one entry, and its counts
+    // include merged layers — hence `exact`.
+    stacks:
       pr.stack && pr.stackEntry
-        ? {
-            number: pr.stack.number,
-            size: pr.stack.size,
-            position: pr.stackEntry.position,
-          }
-        : null,
+        ? [
+            {
+              // Stack numbers restart per repository, so a bare number focuses
+              // "stack 3" in every repo at once.
+              id: `${pr.repository.nameWithOwner}#${pr.stack.number}`,
+              size: pr.stack.size,
+              position: pr.stackEntry.position,
+              precision: "exact",
+            },
+          ]
+        : [],
   };
 }
 
@@ -257,7 +319,14 @@ export type BucketId = (typeof BUCKETS)[number]["id"];
 /** First match wins. Buckets 1/2/6 and 3/4/5 are disjoint by construction. */
 export function bucketOf(pr: PullRequest): BucketId {
   if (pr.standing === "awaiting-me") return 1;
-  if (pr.standing === "i-requested-changes") return pr.staleBlock ? 2 : 6;
+  if (pr.standing === "i-requested-changes") {
+    // `null` means the provider cannot tell whether the head moved. Resolved
+    // toward stale, following the precedent 0005's second amendment set for
+    // GitHub's null-commit case: every other unknown here resolves to the
+    // non-alarming reading, but this is the one place where that would suppress
+    // action. Ticket 0021 owns the final call.
+    return pr.staleBlock === null || pr.staleBlock.value ? 2 : 6;
+  }
   if (pr.standing === "mine") {
     // `none` (no CI configured) and `unknown` (GitHub has not computed
     // mergeability yet) are non-committal, not blocking. Demanding
@@ -309,7 +378,10 @@ export function compareWithin(
         : desc(a.updatedAt, b.updatedAt);
   if (primary !== 0) return primary;
 
-  return asc(a.repo, b.repo) || a.number - b.number;
+  // Total across providers: a GitHub repo and a GitLab project can share a full
+  // path, and without the last term those two rows would sort in input order —
+  // which is exactly the shuffling between scans this tiebreak exists to stop.
+  return asc(a.repo, b.repo) || a.number - b.number || asc(a.provider, b.provider);
 }
 
 export interface Bucket {
@@ -332,7 +404,11 @@ export function groupIntoBuckets(prs: PullRequest[]): Bucket[] {
 /** The ungrouped view: one flat list, most recently updated first. */
 export function flatten(prs: PullRequest[]): PullRequest[] {
   return [...prs].sort(
-    (a, b) => desc(a.updatedAt, b.updatedAt) || asc(a.repo, b.repo) || a.number - b.number,
+    (a, b) =>
+      desc(a.updatedAt, b.updatedAt) ||
+      asc(a.repo, b.repo) ||
+      a.number - b.number ||
+      asc(a.provider, b.provider),
   );
 }
 
@@ -369,7 +445,7 @@ const MERGE_STATES: Record<MergeState, true> = {
  * reaches both `open` and an OSC 8 escape sequence.
  */
 /** Git object ids only; `headOid` is rendered and compared, never executed. */
-const OID = /^[0-9a-f]{0,64}$/;
+export const OID = /^[0-9a-f]{0,64}$/;
 
 /**
  * A string that survived sanitisation unchanged. This is the same fixed-point
@@ -377,7 +453,7 @@ const OID = /^[0-9a-f]{0,64}$/;
  * than a type assertion: sanitisation lives in `normalize`, and anything read
  * back off disk never passes through `normalize`.
  */
-const isClean = (value: unknown): value is string =>
+export const isClean = (value: unknown): value is string =>
   typeof value === "string" && sanitize(value) === value;
 
 export function isPullRequest(value: unknown): value is PullRequest {
@@ -396,18 +472,59 @@ export function isPullRequest(value: unknown): value is PullRequest {
     OID.test(pr.headOid) &&
     isClean(pr.baseRef) &&
     typeof pr.draft === "boolean" &&
-    typeof pr.staleBlock === "boolean" &&
+    isStaleBlockShape(pr.staleBlock) &&
     typeof pr.viaCodeOwners === "boolean" &&
     typeof pr.otherReviews === "number" &&
+    PROVIDERS[pr.provider as Provider] === true &&
+    urlMatchesProvider(pr.url, pr.provider as Provider) &&
     VERDICTS[pr.verdict as Verdict] === true &&
     STANDINGS[pr.standing as Standing] === true &&
     CHECKS[pr.checks as Checks] === true &&
     MERGE_STATES[pr.merge as MergeState] === true &&
-    (pr.stack === null ||
-      (typeof pr.stack === "object" &&
-        pr.stack !== null &&
-        typeof (pr.stack as Record<string, unknown>).number === "number" &&
-        typeof (pr.stack as Record<string, unknown>).size === "number" &&
-        typeof (pr.stack as Record<string, unknown>).position === "number"))
+    Array.isArray(pr.stacks) &&
+    pr.stacks.every(isStackShape)
+  );
+}
+
+const PROVIDER_HOSTS: Record<Provider, string> = {
+  github: "github.com",
+  gitlab: "gitlab.com",
+};
+
+/**
+ * A stored row's link must belong to the forge it claims. Without this, `url` was
+ * merely "some https address", and a tampered row could name one provider while
+ * pointing its clickable link and its `open` target anywhere.
+ */
+function urlMatchesProvider(url: unknown, provider: Provider): boolean {
+  if (url === null) return true;
+  if (typeof url !== "string") return false;
+  try {
+    return new URL(url).hostname === PROVIDER_HOSTS[provider];
+  } catch {
+    return false;
+  }
+}
+
+const PROVIDERS: Record<Provider, true> = { github: true, gitlab: true };
+const PRECISIONS: Record<Precision, true> = { exact: true, approximate: true };
+
+function isStaleBlockShape(value: unknown): boolean {
+  if (value === null) return true;
+  if (typeof value !== "object") return false;
+  const sb = value as Record<string, unknown>;
+  return (
+    typeof sb.value === "boolean" && PRECISIONS[sb.precision as Precision] === true
+  );
+}
+
+function isStackShape(value: unknown): boolean {
+  if (value === null || typeof value !== "object") return false;
+  const s = value as Record<string, unknown>;
+  return (
+    (s.id === null || typeof s.id === "string") &&
+    typeof s.size === "number" &&
+    typeof s.position === "number" &&
+    PRECISIONS[s.precision as Precision] === true
   );
 }

@@ -104,7 +104,7 @@ describe("the painted dashboard", () => {
 
   test("shows the stack position", async () => {
     const h = await paint({
-      prs: [pr({ standing: "awaiting-me", stack: { number: 5, size: 3, position: 2 } })],
+      prs: [pr({ standing: "awaiting-me", stacks: [{ id: "5", size: 3, position: 2, precision: "exact" }] })],
     });
     expect(h.captureCharFrame()).toInclude("2/3");
     h.renderer.destroy();
@@ -214,7 +214,7 @@ describe("keyboard", () => {
   test("s focuses the stack the cursor is on, and leaves it again", async () => {
     const h = await paint({
       prs: [
-        pr({ number: 1, standing: "awaiting-me", title: "stacked", stack: { number: 5, size: 2, position: 1 } }),
+        pr({ number: 1, standing: "awaiting-me", title: "stacked", stacks: [{ id: "5", size: 2, position: 1, precision: "exact" }] }),
         pr({ number: 2, standing: "awaiting-me", title: "unstacked" }),
       ],
     });

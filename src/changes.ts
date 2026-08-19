@@ -101,7 +101,18 @@ export function diff(previous: PullRequest[], current: PullRequest[]): Change[] 
 
     // A push only matters while the viewer is blocking: it is the signal that
     // the author has addressed the review and is waiting, unaware.
-    if (was.headOid !== pr.headOid && pr.standing === "i-requested-changes") {
+    //
+    // Both sides must be known. GitLab computes `diffHeadSha` asynchronously, so a
+    // new MR arrives with `""` and fills in later — and this kind outranks almost
+    // everything in `KIND_ORDER`, so the row would report "addressed" on the
+    // strength of GitLab catching up. Directional, like the other lazy-field
+    // guards below.
+    if (
+      was.headOid !== "" &&
+      pr.headOid !== "" &&
+      was.headOid !== pr.headOid &&
+      pr.standing === "i-requested-changes"
+    ) {
       changes.push({
         kind: "pushed-while-blocked",
         prId: pr.id,
@@ -167,10 +178,17 @@ export function diff(previous: PullRequest[], current: PullRequest[]): Change[] 
     // Compare buckets on equal footing: where a field's movement was suppressed
     // as noise, substitute the current value so a bucket move driven purely by
     // that resolution does not fire either.
+    //
+    // `staleBlock` joins them for GitLab, which reports `null` — "cannot tell" —
+    // until the reviewer record carries a timestamp. Learning the answer is not
+    // movement, and the bucket it lands in reads "your block no longer applies",
+    // the *less* alarming direction. Only null → known is substituted; a genuine
+    // change between two known values still fires.
     const comparable = {
       ...was,
       merge: suppressMerge ? pr.merge : was.merge,
       checks: suppressChecks ? pr.checks : was.checks,
+      staleBlock: was.staleBlock === null ? pr.staleBlock : was.staleBlock,
     };
     const wasBucket = bucketOf(comparable);
     const nowBucket = bucketOf(pr);

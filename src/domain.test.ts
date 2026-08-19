@@ -154,15 +154,16 @@ describe("stale block", () => {
         nodes: [review(VIEWER, "CHANGES_REQUESTED", HEAD)],
       },
     });
-    expect(isStaleBlock(moved, VIEWER)).toBe(true);
-    expect(isStaleBlock(unchanged, VIEWER)).toBe(false);
+    expect(isStaleBlock(moved, VIEWER)).toEqual({ value: true, precision: "exact" });
+    expect(isStaleBlock(unchanged, VIEWER)).toEqual({ value: false, precision: "exact" });
   });
 
   test("an approval of mine is never a stale block", () => {
     const approved = raw({
       latestOpinionatedReviews: { nodes: [review(VIEWER, "APPROVED", "older")] },
     });
-    expect(isStaleBlock(approved, VIEWER)).toBe(false);
+    // Not a block at all, so there is nothing to be stale — null, not false.
+    expect(isStaleBlock(approved, VIEWER)).toBeNull();
   });
 
   test("a blocking review whose commit is gone counts as stale", () => {
@@ -175,7 +176,7 @@ describe("stale block", () => {
         nodes: [review(VIEWER, "CHANGES_REQUESTED", null)],
       },
     });
-    expect(isStaleBlock(forcePushed, VIEWER)).toBe(true);
+    expect(isStaleBlock(forcePushed, VIEWER)).toEqual({ value: true, precision: "exact" });
     expect(bucketOf(normalize(forcePushed, VIEWER))).toBe(2);
   });
 });
@@ -183,10 +184,47 @@ describe("stale block", () => {
 describe("buckets", () => {
   test("a stale block lands in 2, an unchanged one in 6", () => {
     expect(
-      bucketOf(pr({ standing: "i-requested-changes", staleBlock: true })),
+      bucketOf(
+        pr({
+          standing: "i-requested-changes",
+          staleBlock: { value: true, precision: "exact" },
+        }),
+      ),
     ).toBe(2);
     expect(
-      bucketOf(pr({ standing: "i-requested-changes", staleBlock: false })),
+      bucketOf(
+        pr({
+          standing: "i-requested-changes",
+          staleBlock: { value: false, precision: "exact" },
+        }),
+      ),
+    ).toBe(6);
+  });
+
+  test("an undecidable stale block resolves toward action, not away from it", () => {
+    // `null` means the provider cannot tell — GitLab, 20% of its blocking
+    // cohort. Following the precedent 0005's second amendment set: every other
+    // unknown resolves to the non-alarming reading, but this is the one place
+    // where that would suppress action. Ticket 0021 owns the final call.
+    expect(bucketOf(pr({ standing: "i-requested-changes", staleBlock: null }))).toBe(2);
+  });
+
+  test("an approximate stale block is trusted like an exact one", () => {
+    expect(
+      bucketOf(
+        pr({
+          standing: "i-requested-changes",
+          staleBlock: { value: true, precision: "approximate" },
+        }),
+      ),
+    ).toBe(2);
+    expect(
+      bucketOf(
+        pr({
+          standing: "i-requested-changes",
+          staleBlock: { value: false, precision: "approximate" },
+        }),
+      ),
     ).toBe(6);
   });
 
@@ -323,13 +361,41 @@ describe("sorting", () => {
 });
 
 describe("normalize", () => {
-  test("carries stack position only when both halves are present", () => {
+  test("carries stack membership only when both halves are present", () => {
+    // GitHub membership is a partition, so at most one entry, and its counts
+    // include merged layers — hence `exact`.
     expect(
       normalize(raw({ stack: { number: 7, size: 4 }, stackEntry: { position: 2 } }), VIEWER)
-        .stack,
-    ).toEqual({ number: 7, size: 4, position: 2 });
-    expect(normalize(raw({ stack: { number: 7, size: 4 } }), VIEWER).stack).toBeNull();
-    expect(normalize(raw(), VIEWER).stack).toBeNull();
+        .stacks,
+    ).toEqual([{ id: "o/r#7", size: 4, position: 2, precision: "exact" }]);
+    expect(normalize(raw({ stack: { number: 7, size: 4 } }), VIEWER).stacks).toEqual([]);
+    expect(normalize(raw(), VIEWER).stacks).toEqual([]);
+  });
+
+  test("stack ids do not collide across repositories", () => {
+    // Stack numbers restart per repo, so a bare number focused "stack 3"
+    // everywhere at once.
+    const one = normalize(
+      raw({
+        repository: { nameWithOwner: "o/one" },
+        stack: { number: 3, size: 2 },
+        stackEntry: { position: 1 },
+      }),
+      VIEWER,
+    );
+    const two = normalize(
+      raw({
+        repository: { nameWithOwner: "o/two" },
+        stack: { number: 3, size: 2 },
+        stackEntry: { position: 1 },
+      }),
+      VIEWER,
+    );
+    expect(one.stacks[0]!.id).not.toBe(two.stacks[0]!.id);
+  });
+
+  test("stamps the provider", () => {
+    expect(normalize(raw(), VIEWER).provider).toBe("github");
   });
 
   test("counts opinionated reviews by others, excluding mine", () => {
@@ -466,8 +532,21 @@ describe("isPullRequest", () => {
 
   test("rejects a missing or misshapen field", () => {
     expect(isPullRequest({ ...good, id: undefined })).toBe(false);
-    expect(isPullRequest({ ...good, number: "1" })).toBe(false);
-    expect(isPullRequest({ ...good, stack: { number: 1 } })).toBe(false);
+    expect(isPullRequest({ ...good, stacks: [{ size: 1 }] })).toBe(false);
+    expect(isPullRequest({ ...good, stacks: "nope" })).toBe(false);
+    expect(isPullRequest({ ...good, provider: "bitbucket" })).toBe(false);
+    expect(isPullRequest({ ...good, provider: undefined })).toBe(false);
+    expect(isPullRequest({ ...good, staleBlock: true })).toBe(false);
+    expect(
+      isPullRequest({ ...good, staleBlock: { value: true, precision: "guessed" } }),
+    ).toBe(false);
+    expect(
+      isPullRequest({
+        ...good,
+        stacks: [{ id: null, size: 2, position: 1, precision: "approximate" }],
+      }),
+    ).toBe(true);
+
     expect(isPullRequest(null)).toBe(false);
     expect(isPullRequest("nope")).toBe(false);
   });
@@ -506,5 +585,46 @@ describe("canonicalTime", () => {
     );
     expect(p.createdAt).toBe("2026-04-16T15:54:22.000Z");
     expect(p.updatedAt).toBe("2026-04-16T16:00:00.000Z");
+  });
+});
+
+describe("provider is bound to the URL host", () => {
+  const good = normalize(raw(), VIEWER);
+
+  test("a GitHub row must carry a github.com link", () => {
+    expect(isPullRequest({ ...good, url: "https://github.com/o/r/pull/1" })).toBe(true);
+    // Without this, `url` was merely "some https address", so a tampered row could
+    // claim one provider while pointing `open` and its OSC 8 link anywhere.
+    expect(isPullRequest({ ...good, url: "https://evil.example/anything" })).toBe(false);
+    expect(isPullRequest({ ...good, url: "https://gitlab.com/g/p/-/merge_requests/1" })).toBe(
+      false,
+    );
+  });
+
+  test("a GitLab row must carry a gitlab.com link", () => {
+    const gl = { ...good, provider: "gitlab" as const };
+    expect(
+      isPullRequest({ ...gl, url: "https://gitlab.com/g/s/p/-/merge_requests/1" }),
+    ).toBe(true);
+    expect(isPullRequest({ ...gl, url: "https://github.com/o/r/pull/1" })).toBe(false);
+  });
+
+  test("a null link is still allowed", () => {
+    expect(isPullRequest({ ...good, url: null })).toBe(true);
+  });
+});
+
+describe("headOid is validated at the producer", () => {
+  test("a sha the validator would reject never reaches the model", () => {
+    // Otherwise the row is silently dropped on the next read, which flags the
+    // whole provider incomplete and resets its baseline — wildly out of
+    // proportion to one odd sha.
+    expect(normalize(raw({ headRefOid: "NOT-HEX" }), VIEWER).headOid).toBe("");
+    expect(isPullRequest(normalize(raw({ headRefOid: "NOT-HEX" }), VIEWER))).toBe(true);
+  });
+
+  test("a real sha passes through untouched", () => {
+    const sha = "a".repeat(40);
+    expect(normalize(raw({ headRefOid: sha }), VIEWER).headOid).toBe(sha);
   });
 });

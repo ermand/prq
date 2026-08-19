@@ -33,12 +33,18 @@ for (const failure of result.failures) lines.push(`  INCOMPLETE — ${failure}`)
 for (const bucket of groupIntoBuckets(result.prs)) {
   lines.push("", `${bucket.label} (${bucket.items.length})`);
   for (const pr of bucket.items) {
-    const stack = pr.stack ? ` [stack ${pr.stack.position}/${pr.stack.size}]` : "";
+    const stack = pr.stacks.map((s) => ` [stack ${s.position}/${s.size}]`).join("");
     const flags = [
       pr.draft ? "draft" : "",
       pr.checks === "failing" ? "ci-red" : "",
       pr.merge === "conflicted" ? "conflict" : "",
-      pr.staleBlock ? "moved-since-my-block" : "",
+      // `null` is "the provider cannot tell", which is not the same as "it did not
+      // move" — and the row still sits in the bucket that assumes it might have.
+      pr.staleBlock === null
+        ? "may-have-moved"
+        : pr.staleBlock.value
+          ? "moved-since-my-block"
+          : "",
     ].filter(Boolean);
     lines.push(
       `  ${pr.repo}#${pr.number} ${pr.title.slice(0, 60)}` +

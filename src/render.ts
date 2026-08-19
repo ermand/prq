@@ -17,7 +17,7 @@ export interface ViewState {
   grouped: boolean;
   filter: string;
   /** Show only members of this stack, by stack number. */
-  stackFocus: number | null;
+  stackFocus: string | null;
   /** Show only PRs that moved in the last sync. */
   changedOnly: boolean;
   /** Ids that moved in the last sync; consulted when `changedOnly` is set. */
@@ -39,7 +39,7 @@ export function visiblePrs(state: ViewState): PullRequest[] {
   return state.prs.filter(
     (pr) =>
       matchesFilter(pr, state.filter) &&
-      (state.stackFocus === null || pr.stack?.number === state.stackFocus) &&
+      (state.stackFocus === null || pr.stacks.some((s) => s.id === state.stackFocus)) &&
       (!state.changedOnly || state.changedIds.has(pr.id)),
   );
 }
@@ -104,11 +104,21 @@ export function formatRow(
   width: number,
   now = new Date(),
 ): RowSegments {
-  const ref = `${pr.repo.split("/")[1] ?? pr.repo}#${pr.number}`;
+  // The last segment, not the second: GitLab paths nest, so `[1]` rendered
+  // `group/subgroup/project` as `subgroup#42` — and a project at
+  // `anything/facebook/react` would have aliased the GitHub repo of that name in
+  // this shared list. The provider prefix makes the two namespaces
+  // unconfusable at a glance.
+  const project = pr.repo.split("/").at(-1) ?? pr.repo;
+  const ref = `${pr.provider === "gitlab" ? "gl:" : ""}${project}#${pr.number}`;
   const marks = [
     CHECK_GLYPH[pr.checks],
     pr.merge === "conflicted" ? "!" : " ",
-    pr.stack ? `${pr.stack.position}/${pr.stack.size}` : "",
+    // `~` marks an approximate count: GitLab lists only open layers, so it cannot
+    // express a partly-landed 5/6 the way GitHub can.
+    pr.stacks
+      .map((s) => `${s.position}/${s.size}${s.precision === "approximate" ? "~" : ""}`)
+      .join(" "),
   ]
     .join("")
     .trimEnd();
@@ -165,7 +175,8 @@ export function statusLine(
   }
   if (!state.grouped) parts.push("flat");
   if (state.changedOnly) parts.push("changed only");
-  if (state.stackFocus !== null) parts.push(`stack ${state.stackFocus}`);
+  // The key is a provider node id, which is long and meaningless on screen.
+  if (state.stackFocus !== null) parts.push("one stack");
   if (state.filter !== "") parts.push(`/${state.filter}`);
   if (extras.partial) parts.push("INCOMPLETE — not committed");
   return parts.join(" · ");

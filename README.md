@@ -1,8 +1,8 @@
 # prq
 
-A terminal dashboard for the pull requests that concern you, across a saved list
-of GitHub repositories — grouped by what you should do next, and able to tell you
-what changed since you last looked.
+A terminal dashboard for the pull and merge requests that concern you, across a
+saved list of GitHub and GitLab projects — grouped by what you should do next, and
+able to tell you what changed since you last looked.
 
 ## Setup
 
@@ -14,17 +14,25 @@ bun src/cli.ts init      # writes an example config
 Then edit `~/.config/prq/config.yaml`:
 
 ```yaml
-repos:
+github:
   - owner/repo
   - owner/another-repo
+
+gitlab:
+  - group/subgroup/project   # nested as deeply as your groups go
 
 # Optional. Omit for ~/.local/state/prq/state.db.
 # A relative path resolves against the directory you run prq from.
 statePath: .prq/state.db
 ```
 
-Authentication comes from `gh auth login`, or a `GITHUB_TOKEN` / `GH_TOKEN`
-environment variable. Nothing else to configure.
+Either key may be omitted. Provider is declared by which list an entry sits in,
+never inferred from the path — `gitlab-org/gitlab` is two segments, exactly like a
+GitHub repo, so depth carries no information.
+
+Authentication is per provider and discovered, not configured: `gh auth login` or
+`GITHUB_TOKEN`, and `glab auth login` or `GITLAB_TOKEN`. Each provider reports its
+own absence, and one missing credential does not stop the other.
 
 ## Running
 
@@ -104,6 +112,28 @@ A bare push is deliberately *not* reported unless you are blocking the PR.
 Dependency bots push constantly, and an unconditional push axis would report
 nothing else.
 
+## What the two providers can and cannot say
+
+The row model carries the richer shape of the two, and each row records how well
+its provider filled it — because **capability is per project, not per provider**. A
+blocking review is reportable on a paid GitLab project and invisible on a free one,
+inside a single scan.
+
+| | GitHub | GitLab |
+| --- | --- | --- |
+| changes requested | always | paid tiers only |
+| "I blocked it, and it moved" | exact, by comparing commits | approximate, by comparing timestamps; sometimes undecidable |
+| stacks | one stack, counts merged layers | may belong to several; open layers only, shown `2/4~` |
+| "someone mentioned me" | yes | **not expressible** — GitLab has no such filter |
+
+A `~` after a stack position means the count is approximate. An undecidable
+"blocked and moved" resolves *toward* action rather than away from it: it is better
+to look twice than to leave someone waiting.
+
+GitLab cannot filter by "mentions me" or "commented on it" in either of its APIs,
+so its scan fetches the open MRs in your projects and filters locally. That is
+affordable because the list is explicit and small.
+
 ## Other commands
 
 ```bash
@@ -131,9 +161,11 @@ OpenTUI's native core, not the application.
 | --- | --- |
 | `src/domain.ts` | the state model, and the trust boundary every remote string crosses |
 | `src/changes.ts` | pure diff between two syncs |
-| `src/query.ts` | the GraphQL for a scan |
-| `src/github.ts` | the two searches, unioned |
-| `src/store.ts` | SQLite state, migration, atomic commit |
+| `src/providers.ts` | the seam: one operation, two implementations |
+| `src/query.ts` | the GraphQL for a GitHub scan |
+| `src/github.ts` | GitHub — two searches, unioned server-side |
+| `src/gitlab.ts` | GitLab — one query, then a local involvement filter |
+| `src/store.ts` | SQLite state, per-provider baselines, migration, atomic commit |
 | `src/render.ts` | rows, buckets and the status line, all pure |
 | `src/tui.ts` | the OpenTUI dashboard |
 | `src/cli.ts` | entry point and sync semantics |

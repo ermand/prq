@@ -70,6 +70,8 @@ export interface AppOptions {
   /** Null when nothing has ever been synced. */
   lastSync: Date | null;
   baselineReset: boolean;
+  /** Failures already known at launch — an unreadable stored half, say. */
+  failures?: string[];
   sync: (signal: AbortSignal) => Promise<SyncedState>;
 }
 
@@ -126,7 +128,7 @@ export function mountApp(
   let viewer = options.viewer;
   // A committed sync was whole by construction — partial ones are never
   // committed — so a launch read from the store starts with no failures.
-  let failures: string[] = [];
+  let failures: string[] = options.failures ?? [];
   let baselineReset = options.baselineReset;
   let changed = byPr(options.changes);
   let cursor = 0;
@@ -396,10 +398,11 @@ export function mountApp(
         if (view.stackFocus !== null) {
           view.stackFocus = null;
         } else {
-          const pr = currentPr();
-          if (pr?.stack) {
-            view.stackFocus = pr.stack.number;
-            notice = `stack ${pr.stack.number} — press s to leave`;
+          // A row can sit in several chains on GitLab; the first is this row's own.
+          const membership = currentPr()?.stacks[0];
+          if (membership) {
+            view.stackFocus = membership.id;
+            notice = `${membership.size} in this stack — press s to leave`;
           } else {
             notice = "not in a stack";
           }

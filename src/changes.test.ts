@@ -305,3 +305,51 @@ describe("isChangeKind", () => {
     expect(isChangeKind(undefined)).toBe(false);
   });
 });
+
+describe("lazily filled GitLab fields", () => {
+  test("learning a head oid is not a push", () => {
+    // GitLab computes `diffHeadSha` asynchronously, so a new MR arrives with "" and
+    // fills in later. `pushed-while-blocked` outranks nearly everything in
+    // KIND_ORDER, so the row would headline "addressed" on the strength of GitLab
+    // catching up.
+    const before = pr({ headOid: "", standing: "i-requested-changes" });
+    const after = pr({ headOid: "a".repeat(40), standing: "i-requested-changes" });
+    expect(diff([before], [after])).toEqual([]);
+  });
+
+  test("losing a head oid is not a push either", () => {
+    const before = pr({ headOid: "a".repeat(40), standing: "i-requested-changes" });
+    const after = pr({ headOid: "", standing: "i-requested-changes" });
+    expect(diff([before], [after])).toEqual([]);
+  });
+
+  test("a real push between two known oids still reports", () => {
+    const before = pr({ headOid: "a".repeat(40), standing: "i-requested-changes" });
+    const after = pr({ headOid: "b".repeat(40), standing: "i-requested-changes" });
+    expect(diff([before], [after]).map((c) => c.kind)).toContain("pushed-while-blocked");
+  });
+
+  test("learning a stale block is not a bucket move", () => {
+    // `null` is "cannot tell", and 51 of 311 live reviewer records had no
+    // timestamp. Learning the answer would read "your block no longer applies" —
+    // the less alarming direction, which is the reading the null policy refused.
+    const before = pr({ standing: "i-requested-changes", staleBlock: null });
+    const after = pr({
+      standing: "i-requested-changes",
+      staleBlock: { value: false, precision: "approximate" },
+    });
+    expect(diff([before], [after])).toEqual([]);
+  });
+
+  test("a stale block that genuinely changes still moves the bucket", () => {
+    const before = pr({
+      standing: "i-requested-changes",
+      staleBlock: { value: false, precision: "exact" },
+    });
+    const after = pr({
+      standing: "i-requested-changes",
+      staleBlock: { value: true, precision: "exact" },
+    });
+    expect(diff([before], [after]).map((c) => c.kind)).toContain("bucket");
+  });
+});

@@ -40,11 +40,12 @@ const mem = () => Store.open(":memory:");
 
 const commit = (store: Store, prs: PullRequest[], previous: PullRequest[] = []) =>
   store.commit({
+    provider: "github",
     viewer: "ermand",
     repos: ["org/repo"],
     prs,
     changes: diff(previous, prs),
-    baselineReset: previous.length === 0 && store.syncCount() === 0,
+    baselineReset: previous.length === 0 && store.syncCount("github") === 0,
   });
 
 describe("storePath", () => {
@@ -64,7 +65,7 @@ describe("storePath", () => {
 describe("an empty store", () => {
   test("reads as nothing, not as an error", async () => {
     const store = await mem();
-    const state = store.read();
+    const state = store.read("github");
     expect(state.sync).toBeNull();
     expect(state.prs).toEqual([]);
     expect(state.changes).toEqual([]);
@@ -76,7 +77,7 @@ describe("commit and read", () => {
   test("round-trips the pull requests", async () => {
     const store = await mem();
     commit(store, [pr({ title: "kept" })]);
-    const state = store.read();
+    const state = store.read("github");
     expect(state.prs).toHaveLength(1);
     expect(state.prs[0]!.title).toBe("kept");
     expect(state.sync?.viewer).toBe("ermand");
@@ -88,7 +89,7 @@ describe("commit and read", () => {
     const store = await mem();
     commit(store, [pr({ id: "A" }), pr({ id: "B", number: 2 })]);
     commit(store, [pr({ id: "A" })], [pr({ id: "A" }), pr({ id: "B", number: 2 })]);
-    expect(store.read().prs.map((p) => p.id)).toEqual(["A"]);
+    expect(store.read("github").prs.map((p) => p.id)).toEqual(["A"]);
     expect(store.syncCount()).toBe(2);
     store.close();
   });
@@ -100,7 +101,7 @@ describe("commit and read", () => {
     // Second sync: A's checks go red.
     const second = [pr({ id: "A", checks: "failing" })];
     commit(store, second, first);
-    const changes = store.read().changes;
+    const changes = store.read("github").changes;
     expect(changes.map((c) => c.kind)).toContain("checks");
     expect(changes.every((c) => c.prId === "A")).toBe(true);
     store.close();
@@ -111,7 +112,7 @@ describe("commit and read", () => {
     const before = [pr({ id: "A", baseRef: "feature/x" })];
     commit(store, before);
     commit(store, [pr({ id: "A", baseRef: "main" })], before);
-    const retarget = store.read().changes.find((c) => c.kind === "retargeted");
+    const retarget = store.read("github").changes.find((c) => c.kind === "retargeted");
     expect(retarget?.from).toBe("feature/x");
     expect(retarget?.to).toBe("main");
     store.close();
@@ -120,7 +121,7 @@ describe("commit and read", () => {
   test("marks a first sync as a baseline reset", async () => {
     const store = await mem();
     commit(store, [pr()]);
-    expect(store.read().sync?.baselineReset).toBe(true);
+    expect(store.read("github").sync?.baselineReset).toBe(true);
     store.close();
   });
 
@@ -129,7 +130,7 @@ describe("commit and read", () => {
     const first = [pr()];
     commit(store, first);
     commit(store, first, first);
-    expect(store.read().sync?.baselineReset).toBe(false);
+    expect(store.read("github").sync?.baselineReset).toBe(false);
     store.close();
   });
 });
@@ -146,12 +147,13 @@ describe("stored rows are untrusted", () => {
     });
     // @ts-expect-error — deliberately reaching into the private handle to
     // simulate an external writer tampering with the file.
-    store.db.query("INSERT INTO pr (id, synced, payload) VALUES (?, ?, ?)").run(
+    store.db.query("INSERT INTO pr (id, provider, synced, payload) VALUES (?, ?, ?, ?)").run(
       "BAD",
+      "github",
       1,
       poisoned,
     );
-    expect(store.read().prs.map((p) => p.id)).toEqual(["GOOD"]);
+    expect(store.read("github").prs.map((p) => p.id)).toEqual(["GOOD"]);
     store.close();
   });
 
@@ -159,12 +161,13 @@ describe("stored rows are untrusted", () => {
     const store = await mem();
     commit(store, [pr({ id: "GOOD" })]);
     // @ts-expect-error — see above.
-    store.db.query("INSERT INTO pr (id, synced, payload) VALUES (?, ?, ?)").run(
+    store.db.query("INSERT INTO pr (id, provider, synced, payload) VALUES (?, ?, ?, ?)").run(
       "JUNK",
+      "github",
       1,
       "{ not json",
     );
-    expect(store.read().prs.map((p) => p.id)).toEqual(["GOOD"]);
+    expect(store.read("github").prs.map((p) => p.id)).toEqual(["GOOD"]);
     store.close();
   });
 });
@@ -178,6 +181,51 @@ describe("migration", () => {
       await rm(`${path}${suffix}`, { force: true });
     }
   };
+
+  test("a v1 database opens, gains the provider column, and keeps its history", async () => {
+    // v1 predates providers. `CREATE TABLE IF NOT EXISTS` leaves the old shape,
+    // so without an explicit ALTER the new index references a column that does
+    // not exist and every open dies with `no such column: provider`.
+    await wipe();
+    const v1 = new Database(path, { create: true });
+    v1.run("PRAGMA journal_mode = WAL");
+    v1.run(
+      "CREATE TABLE sync (id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, viewer TEXT NOT NULL, repos TEXT NOT NULL, pr_count INTEGER NOT NULL, baseline_reset INTEGER NOT NULL DEFAULT 0)",
+    );
+    v1.run(
+      "CREATE TABLE pr (id TEXT PRIMARY KEY, synced INTEGER NOT NULL, payload TEXT NOT NULL)",
+    );
+    v1.run(
+      "CREATE TABLE change (sync_id INTEGER NOT NULL, pr_id TEXT NOT NULL, kind TEXT NOT NULL, from_v TEXT, to_v TEXT, PRIMARY KEY (sync_id, pr_id, kind))",
+    );
+    v1.run(
+      "INSERT INTO sync (at, viewer, repos, pr_count, baseline_reset) VALUES (?, ?, ?, ?, 0)",
+      ["2026-01-01T00:00:00Z", "ermand", '["o/a"]', 1],
+    );
+    v1.run("INSERT INTO pr (id, synced, payload) VALUES (?, ?, ?)", [
+      "PR_old",
+      1,
+      '{"id":"PR_old"}',
+    ]);
+    v1.run("INSERT INTO change (sync_id, pr_id, kind) VALUES (1, 'PR_old', 'joined')");
+    v1.run("PRAGMA user_version = 1");
+    v1.close();
+
+    const store = await Store.open(path);
+    // Defaulting the new column to `github` is not a guess: v1 could only ever
+    // hold GitHub rows.
+    expect(store.lastSync("github")?.provider).toBe("github");
+    // History survives — it is the only record of things the API cannot restate.
+    expect(store.syncCount()).toBe(1);
+    // The stored payload shape belongs to v1, so those rows are dropped, which
+    // flags the state incomplete and makes the next sync reset the baseline.
+    const state = store.read("github");
+    expect(state.prs).toEqual([]);
+    expect(state.incomplete).toBe(true);
+    expect(state.changes).toEqual([]);
+    store.close();
+    await wipe();
+  });
 
   test("a fresh database is stamped with the schema version", async () => {
     await wipe();
@@ -195,7 +243,7 @@ describe("migration", () => {
     await wipe();
     const store = await Store.open(path);
     commit(store, [pr()]);
-    expect(store.read().prs).toHaveLength(1);
+    expect(store.read("github").prs).toHaveLength(1);
     store.close();
     await wipe();
   });
@@ -204,7 +252,7 @@ describe("migration", () => {
     await wipe();
     const first = await Store.open(path);
     commit(first, [pr()]);
-    expect(first.read().prs).toHaveLength(1);
+    expect(first.read("github").prs).toHaveLength(1);
     first.close();
 
     // Pretend the previous build wrote an older shape. 0 is the pre-versioning
@@ -218,7 +266,7 @@ describe("migration", () => {
     expect(reopened.syncCount()).toBe(1);
     // Current state is gone, so the next sync resets the baseline rather than
     // diffing against a shape it cannot read.
-    expect(reopened.read().prs).toEqual([]);
+    expect(reopened.read("github").prs).toEqual([]);
     reopened.close();
     await wipe();
   });
@@ -277,7 +325,7 @@ describe("hardening", () => {
     const first = await Store.open(path);
     commit(first, [pr()]);
     const second = await Store.open(path);
-    expect(second.read().prs).toHaveLength(1);
+    expect(second.read("github").prs).toHaveLength(1);
     second.close();
     first.close();
     await wipe();
@@ -305,12 +353,12 @@ describe("incomplete stored state", () => {
     const first = [pr({ id: "A" }), pr({ id: "B", number: 2 })];
     commit(store, first);
     commit(store, [pr({ id: "A", checks: "failing" }), pr({ id: "B", number: 2 })], first);
-    expect(store.read().changes.length).toBeGreaterThan(0);
-    expect(store.read().incomplete).toBe(false);
+    expect(store.read("github").changes.length).toBeGreaterThan(0);
+    expect(store.read("github").incomplete).toBe(false);
 
     // @ts-expect-error — reaching the private handle to simulate tampering.
     store.db.query("UPDATE pr SET payload = ? WHERE id = ?").run("{ broken", "B");
-    const state = store.read();
+    const state = store.read("github");
     expect(state.incomplete).toBe(true);
     expect(state.changes).toEqual([]);
     expect(state.prs.map((p) => p.id)).toEqual(["A"]);
@@ -326,7 +374,7 @@ describe("change kinds read off disk", () => {
     const first = [pr({ id: "A" })];
     commit(store, first);
     commit(store, [pr({ id: "A", checks: "failing" })], first);
-    const syncId = store.lastSync()!.id;
+    const syncId = store.lastSync("github")!.id;
     // @ts-expect-error — see above.
     store.db
       .query("INSERT INTO change (sync_id, pr_id, kind, from_v, to_v) VALUES (?, ?, ?, ?, ?)")
@@ -335,7 +383,7 @@ describe("change kinds read off disk", () => {
     store.db
       .query("INSERT INTO change (sync_id, pr_id, kind, from_v, to_v) VALUES (?, ?, ?, ?, ?)")
       .run(syncId, "A", "obsolete-kind", null, null);
-    const kinds = store.read().changes.map((c) => c.kind);
+    const kinds = store.read("github").changes.map((c) => c.kind);
     expect(kinds).toContain("checks");
     expect(kinds).not.toContain("constructor");
     expect(kinds).not.toContain("obsolete-kind");
@@ -407,10 +455,32 @@ describe("a project-local store", () => {
     const relative = resolveStorePath(path);
     const store = await Store.open(relative);
     commit(store, [pr({ title: "beside the project" })]);
-    expect(store.read().prs[0]!.title).toBe("beside the project");
+    expect(store.read("github").prs[0]!.title).toBe("beside the project");
     store.close();
     // Still 0600 even outside the XDG location.
     expect(statSync(path).mode & 0o077).toBe(0);
     await wipe();
+  });
+});
+
+describe("the stored viewer crosses the trust boundary", () => {
+  test("a tampered viewer makes the sync row unreadable rather than painting escapes", async () => {
+    // The viewer is the first field of the header, so it must survive the same
+    // fixed-point check every other stored string does.
+    const store = await mem();
+    commit(store, [pr()]);
+    // @ts-expect-error — reaching the private handle to simulate tampering.
+    store.db
+      .query("UPDATE sync SET viewer = ?")
+      .run("\u001b[2J\u001b[1;1Hattacker\u0007");
+    expect(store.lastSync("github")).toBeNull();
+    store.close();
+  });
+
+  test("an ordinary viewer reads back fine", async () => {
+    const store = await mem();
+    commit(store, [pr()]);
+    expect(store.lastSync("github")?.viewer).toBe("ermand");
+    store.close();
   });
 });

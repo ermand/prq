@@ -87,12 +87,13 @@ waiting on you and cannot tell.
 An ordered chain of dependent PRs, each based on the one below. Membership is what
 the API reports, never what the description claims.
 
-The two providers disagree on its shape, and the glossary cannot yet say which
-meaning wins — that is [0021](.wayfinder/tickets/0021-gitlab-state-mapping.md).
-On **GitHub** a PR is in exactly one stack or none, and the stack has an identity
-and a number. On **GitLab** `MergeRequest.stack` is a *path*, not a partition: one
-MR can legitimately belong to several stacks at once, it counts only open layers,
-and there is no stack identity.
+Membership is a **path**, not a partition: a PR may belong to several stacks at
+once. GitHub happens to report at most one, so it is the degenerate case of the
+same model rather than a second one. On **GitHub** the stack has a number, unique
+only within its repository, so the focus key is namespaced by repo. On **GitLab**
+there is no stack identity at all, so the chain's bottom member stands in — every
+member of one chain agrees on it. GitLab counts only open layers, so its
+membership is always `approximate`.
 
 **Position** / **Size**:
 A PR's 1-based place in its stack, and the stack's total length. On GitHub both

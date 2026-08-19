@@ -81,20 +81,20 @@ describe("matchesFilter", () => {
 
 describe("visiblePrs", () => {
   test("stack focus keeps only that stack", () => {
-    const inStack = pr({ id: "a", stack: { number: 7, size: 3, position: 1 } });
-    const other = pr({ id: "b", stack: { number: 9, size: 2, position: 1 } });
+    const inStack = pr({ id: "a", stacks: [{ id: "7", size: 3, position: 1, precision: "exact" }] });
+    const other = pr({ id: "b", stacks: [{ id: "9", size: 2, position: 1, precision: "exact" }] });
     const loose = pr({ id: "c" });
     const visible = visiblePrs(
-      state({ prs: [inStack, other, loose], stackFocus: 7 }),
+      state({ prs: [inStack, other, loose], stackFocus: "7" }),
     );
     expect(visible.map((p) => p.id)).toEqual(["a"]);
   });
 
   test("filter and stack focus both apply", () => {
-    const match = pr({ id: "a", title: "alpha", stack: { number: 7, size: 2, position: 1 } });
-    const wrongTitle = pr({ id: "b", title: "beta", stack: { number: 7, size: 2, position: 2 } });
+    const match = pr({ id: "a", title: "alpha", stacks: [{ id: "7", size: 2, position: 1, precision: "exact" }] });
+    const wrongTitle = pr({ id: "b", title: "beta", stacks: [{ id: "7", size: 2, position: 2, precision: "exact" }] });
     expect(
-      visiblePrs(state({ prs: [match, wrongTitle], stackFocus: 7, filter: "alpha" })).map(
+      visiblePrs(state({ prs: [match, wrongTitle], stackFocus: "7", filter: "alpha" })).map(
         (p) => p.id,
       ),
     ).toEqual(["a"]);
@@ -181,7 +181,7 @@ describe("formatRow", () => {
 
   test("shows stack position and conflict and CI state", () => {
     const row = formatRow(
-      pr({ stack: { number: 5, size: 4, position: 2 }, merge: "conflicted", checks: "failing" }),
+      pr({ stacks: [{ id: "5", size: 4, position: 2, precision: "exact" }], merge: "conflicted", checks: "failing" }),
       120,
       now,
     );
@@ -234,13 +234,13 @@ describe("statusLine", () => {
 
   test("shows active modes", () => {
     const line = statusLine(
-      state({ grouped: false, filter: "auth", stackFocus: 12, changedOnly: true }),
+      state({ grouped: false, filter: "auth", stackFocus: "12", changedOnly: true }),
       5,
       extras(),
     );
     expect(line).toInclude("flat");
     expect(line).toInclude("changed only");
-    expect(line).toInclude("stack 12");
+    expect(line).toInclude("one stack");
     expect(line).toInclude("/auth");
   });
 });
@@ -258,5 +258,36 @@ describe("changedOnly", () => {
   test("is inert when off", () => {
     const prs = [pr({ id: "a" }), pr({ id: "b", number: 2 })];
     expect(visiblePrs(state({ prs, changedIds: new Set(["a"]) }))).toHaveLength(2);
+  });
+});
+
+describe("the ref cannot alias across providers", () => {
+  const now = new Date("2026-01-01T01:00:00Z");
+
+  test("a nested GitLab path shows its project, not a middle segment", () => {
+    // `split("/")[1]` rendered group/subgroup/project as `subgroup#42`.
+    const row = formatRow(
+      pr({ provider: "gitlab", repo: "group/subgroup/project", number: 42 }),
+      120,
+      now,
+    );
+    expect(row.ref).toBe("gl:project#42");
+  });
+
+  test("a GitLab project cannot impersonate a GitHub repo", () => {
+    // `evil/facebook/react` rendered as `facebook#42`, visually identical to the
+    // GitHub repo while its link pointed at gitlab.com.
+    const spoof = formatRow(
+      pr({ provider: "gitlab", repo: "evil/facebook/react", number: 42 }),
+      120,
+      now,
+    );
+    const real = formatRow(
+      pr({ provider: "github", repo: "facebook/react", number: 42 }),
+      120,
+      now,
+    );
+    expect(spoof.ref).not.toBe(real.ref);
+    expect(real.ref).toBe("react#42");
   });
 });

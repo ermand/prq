@@ -18,13 +18,13 @@
 import { Database } from "bun:sqlite";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import { chmod, mkdir } from "node:fs/promises";
+import { chmod, mkdir, open } from "node:fs/promises";
 import { APP_NAME } from "./config";
 import { isChangeKind, type Change, type ChangeKind } from "./changes";
-import { isPullRequest, type PullRequest } from "./domain";
+import { isClean, isPullRequest, type Provider, type PullRequest } from "./domain";
 
 /** Bumped whenever the schema or the shape of a stored PR changes. */
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 export function storePath(env: NodeJS.ProcessEnv = process.env): string {
   const configured = env.XDG_STATE_HOME;
@@ -55,9 +55,10 @@ export function resolveStorePath(
   return resolve(cwd, expanded);
 }
 
-const SCHEMA = `
+const TABLES = `
 CREATE TABLE IF NOT EXISTS sync (
   id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  provider       TEXT    NOT NULL,
   at             TEXT    NOT NULL,
   viewer         TEXT    NOT NULL,
   repos          TEXT    NOT NULL,
@@ -67,6 +68,7 @@ CREATE TABLE IF NOT EXISTS sync (
 
 CREATE TABLE IF NOT EXISTS pr (
   id       TEXT PRIMARY KEY,
+  provider TEXT NOT NULL,
   synced   INTEGER NOT NULL,
   payload  TEXT    NOT NULL
 );
@@ -79,12 +81,21 @@ CREATE TABLE IF NOT EXISTS change (
   to_v    TEXT,
   PRIMARY KEY (sync_id, pr_id, kind)
 );
+`;
 
+/**
+ * Created after any column-adding migration, never in the same statement batch:
+ * an index on a column an older table does not have yet fails the whole open.
+ */
+const INDEXES = `
+CREATE INDEX IF NOT EXISTS sync_by_provider ON sync(provider, id);
+CREATE INDEX IF NOT EXISTS pr_by_provider ON pr(provider);
 CREATE INDEX IF NOT EXISTS change_by_sync ON change(sync_id);
 `;
 
 export interface SyncRecord {
   id: number;
+  provider: Provider;
   at: string;
   viewer: string;
   repos: string[];
@@ -93,10 +104,18 @@ export interface SyncRecord {
   baselineReset: boolean;
 }
 
+/**
+ * One provider's committed state.
+ *
+ * Baselines are per-provider: a provider that fails to scan freezes only its own
+ * diff, never the other's. That matters because the driver's GitLab token expired
+ * once, and an all-or-nothing rule would have frozen the memory of 29 GitHub PRs
+ * over 8 GitLab MRs.
+ */
 export interface StoredState {
   sync: SyncRecord | null;
   prs: PullRequest[];
-  /** Changes recorded by the most recent sync. */
+  /** Changes recorded by the most recent sync of this provider. */
   changes: Change[];
   /**
    * Stored rows were lost — to a schema drop, or to validation. The changes are
@@ -131,6 +150,13 @@ export class Store {
         // Not ours to tighten. Leave it as the owner set it.
       }
     }
+    if (path !== ":memory:") {
+      // Created 0600 up front rather than at the ambient umask and tightened
+      // afterwards: a local process opening the file in that window keeps a read
+      // descriptor that survives the chmod.
+      const handle = await open(path, "a", 0o600);
+      await handle.close();
+    }
     const db = new Database(path, { create: true });
     // Ordered deliberately: SQLite copies the database's mode onto the -wal and
     // -shm sidecars when it creates them, so the chmod must land *before* WAL is
@@ -157,11 +183,11 @@ export class Store {
   /**
    * Brings an existing database up to `SCHEMA_VERSION`.
    *
-   * There is no migration path yet, so an older database has its **current
-   * state** dropped while its change history is kept: history rows are
-   * self-describing, and discarding them would throw away the only record of
-   * things the API can no longer tell us. Dropping current state forces the next
-   * sync to reset the baseline rather than diff against a shape it cannot read.
+   * Current state is dropped whenever the version moves, because the stored
+   * payload shape belongs to the build that wrote it. Change **history** is kept:
+   * those rows are self-describing and are the only record of things the API can
+   * no longer tell us. Dropping current state forces the next sync to reset the
+   * baseline rather than diff against a shape it cannot read.
    */
   private migrate(path: string): void {
     // `user_version` defaults to 0, so it cannot distinguish a brand-new file
@@ -188,7 +214,23 @@ export class Store {
       );
     }
 
-    this.db.run(SCHEMA);
+    this.db.run(TABLES);
+
+    // v1 predates providers. `CREATE TABLE IF NOT EXISTS` leaves the old shape
+    // untouched, so the column has to be added explicitly — and before the
+    // indexes below, which reference it. Defaulting to `github` is not a guess:
+    // v1 could only ever hold GitHub rows.
+    if (!fresh && version < 2) {
+      for (const table of ["sync", "pr"]) {
+        if (!this.hasColumn(table, "provider")) {
+          this.db.run(
+            `ALTER TABLE ${table} ADD COLUMN provider TEXT NOT NULL DEFAULT 'github'`,
+          );
+        }
+      }
+    }
+
+    this.db.run(INDEXES);
 
     if (!fresh && version !== SCHEMA_VERSION) {
       this.db.run("DELETE FROM pr");
@@ -198,6 +240,13 @@ export class Store {
     if (version !== SCHEMA_VERSION) {
       this.db.run(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     }
+  }
+
+  private hasColumn(table: string, column: string): boolean {
+    return this.db
+      .query<{ name: string }, []>(`PRAGMA table_info(${table})`)
+      .all()
+      .some((c) => c.name === column);
   }
 
   close(): void {
@@ -212,10 +261,13 @@ export class Store {
     this.db.close();
   }
 
-  lastSync(): SyncRecord | null {
+  lastSync(provider: Provider): SyncRecord | null {
     const row = this.db
-      .query<SyncRow, []>("SELECT * FROM sync ORDER BY id DESC LIMIT 1")
-      .get();
+      .query<
+        SyncRow,
+        [string]
+      >("SELECT * FROM sync WHERE provider = ? ORDER BY id DESC LIMIT 1")
+      .get(provider);
     if (row === null) return null;
     // The file is untrusted, and `storedPrs` twelve lines down already treats it
     // that way. An unguarded parse here would brick launch with a bare
@@ -230,9 +282,13 @@ export class Store {
     } catch {
       return null;
     }
-    if (typeof row.viewer !== "string" || typeof row.at !== "string") return null;
+    // The viewer is rendered as the first field of the header, so it crosses the
+    // same boundary every other stored string does — `typeof` alone would let a
+    // tampered row paint escape sequences.
+    if (!isClean(row.viewer) || typeof row.at !== "string") return null;
     return {
       id: row.id,
+      provider,
       at: row.at,
       viewer: row.viewer,
       repos,
@@ -249,8 +305,10 @@ export class Store {
    * escape sequence. The count is returned rather than swallowed — a silent drop
    * makes the next diff fabricate a `left` and then a `joined` for that PR.
    */
-  storedPrs(): { prs: PullRequest[]; rejected: number } {
-    const rows = this.db.query<{ payload: string }, []>("SELECT payload FROM pr").all();
+  storedPrs(provider: Provider): { prs: PullRequest[]; rejected: number } {
+    const rows = this.db
+      .query<{ payload: string }, [string]>("SELECT payload FROM pr WHERE provider = ?")
+      .all(provider);
     const prs: PullRequest[] = [];
     let rejected = 0;
     for (const row of rows) {
@@ -294,11 +352,11 @@ export class Store {
    * sync paired with the rows of the next, and the diff then runs against a
    * baseline that has already moved.
    */
-  read(): StoredState {
+  read(provider: Provider): StoredState {
     return this.db.transaction((): StoredState => {
-      const sync = this.lastSync();
+      const sync = this.lastSync(provider);
       if (sync === null) return { sync: null, prs: [], changes: [], incomplete: false };
-      const { prs, rejected } = this.storedPrs();
+      const { prs, rejected } = this.storedPrs(provider);
       // Rows were lost — to a schema drop, or to validation. The stored changes
       // describe a state we can no longer reproduce, so presenting them as this
       // sync's report would claim changes the list cannot show.
@@ -321,6 +379,7 @@ export class Store {
    * decision belongs at the call site where the failure list is known.
    */
   commit(input: {
+    provider: Provider;
     viewer: string;
     repos: string[];
     prs: PullRequest[];
@@ -334,9 +393,10 @@ export class Store {
     const run = this.db.transaction(() => {
       this.db
         .query(
-          "INSERT INTO sync (at, viewer, repos, pr_count, baseline_reset) VALUES (?, ?, ?, ?, ?)",
+          "INSERT INTO sync (provider, at, viewer, repos, pr_count, baseline_reset) VALUES (?, ?, ?, ?, ?, ?)",
         )
         .run(
+          input.provider,
           at,
           input.viewer,
           JSON.stringify(input.repos),
@@ -348,11 +408,15 @@ export class Store {
         .query<{ id: number }, []>("SELECT last_insert_rowid() AS id")
         .get()!.id;
 
-      this.db.run("DELETE FROM pr");
+      // Scoped to this provider: the other provider's baseline is untouched, so a
+      // failure on one side never disturbs the other's diff.
+      this.db.query("DELETE FROM pr WHERE provider = ?").run(input.provider);
       const insertPr = this.db.query(
-        "INSERT INTO pr (id, synced, payload) VALUES (?, ?, ?)",
+        "INSERT INTO pr (id, provider, synced, payload) VALUES (?, ?, ?, ?)",
       );
-      for (const pr of input.prs) insertPr.run(pr.id, syncId, JSON.stringify(pr));
+      for (const pr of input.prs) {
+        insertPr.run(pr.id, input.provider, syncId, JSON.stringify(pr));
+      }
 
       const insertChange = this.db.query(
         "INSERT OR REPLACE INTO change (sync_id, pr_id, kind, from_v, to_v) VALUES (?, ?, ?, ?, ?)",
@@ -367,6 +431,7 @@ export class Store {
     const syncId = run();
     return {
       id: syncId,
+      provider: input.provider,
       at,
       viewer: input.viewer,
       repos: input.repos,
@@ -375,8 +440,13 @@ export class Store {
     };
   }
 
-  /** Total syncs recorded. Exposed for diagnostics and tests. */
-  syncCount(): number {
-    return this.db.query<{ n: number }, []>("SELECT count(*) AS n FROM sync").get()!.n;
+  /** Syncs recorded, optionally for one provider. For diagnostics and tests. */
+  syncCount(provider?: Provider): number {
+    if (provider === undefined) {
+      return this.db.query<{ n: number }, []>("SELECT count(*) AS n FROM sync").get()!.n;
+    }
+    return this.db
+      .query<{ n: number }, [string]>("SELECT count(*) AS n FROM sync WHERE provider = ?")
+      .get(provider)!.n;
   }
 }
