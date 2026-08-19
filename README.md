@@ -34,6 +34,12 @@ Authentication is per provider and discovered, not configured: `gh auth login` o
 `GITHUB_TOKEN`, and `glab auth login` or `GITLAB_TOKEN`. Each provider reports its
 own absence, and one missing credential does not stop the other.
 
+`glab auth login` may store either a long-lived personal access token or an OAuth
+one that lasts two hours. `glab` refreshes OAuth tokens on its own API calls but
+not when its stored config is merely read, so the token is checked for staleness
+and refreshed through `glab` before a scan uses it. Without that, a sync more than
+two hours after your last `glab` command failed with a bare `401`.
+
 ## Running
 
 ```bash

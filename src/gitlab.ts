@@ -381,6 +381,53 @@ async function post(
   return parsed.data as Awaited<ReturnType<typeof post>>;
 }
 
+const HOST = "gitlab.com";
+
+/** A token this close to lapsing is treated as already gone, so a slow scan cannot outlive it. */
+const EXPIRY_SKEW_MS = 60_000;
+
+async function glab(args: string[]): Promise<{ out: string; err: string; code: number }> {
+  const proc = Bun.spawn(["glab", ...args], { stdout: "pipe", stderr: "pipe" });
+  const [out, err, code] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  return { out, err, code };
+}
+
+/** A single `glab config get` value, or "" when glab cannot answer. */
+async function glabConfig(key: string): Promise<string> {
+  const { out, code } = await glab(["config", "get", key, "--host", HOST]);
+  return code === 0 ? out.trim() : "";
+}
+
+/**
+ * Whether the stored token must be refreshed before it is used.
+ *
+ * Only OAuth tokens expire; a personal access token is left alone. An OAuth token
+ * with no readable expiry is refreshed rather than trusted, because the stored
+ * value cannot be shown to be live and the cost of being wrong is a bare 401.
+ *
+ * Exported for the tests: the decision is worth pinning down without spawning.
+ */
+export function needsRefresh(isOAuth: string, expiry: string, now = new Date()): boolean {
+  if (isOAuth.trim() !== "true") return false;
+  const at = Date.parse(expiry);
+  if (Number.isNaN(at)) return true;
+  return at - now.getTime() <= EXPIRY_SKEW_MS;
+}
+
+/**
+ * Makes glab perform its own authenticated call, which is what triggers the token
+ * refresh and the write-back. Deliberately ignores the outcome: if glab cannot
+ * refresh, the token read that follows either still works or fails with glab's own
+ * message, both of which say more than anything invented here.
+ */
+async function refreshViaGlab(): Promise<void> {
+  await glab(["api", "/user"]);
+}
+
 export const gitlab: ProviderClient = {
   provider: "gitlab",
 
@@ -388,15 +435,15 @@ export const gitlab: ProviderClient = {
     const fromEnv = process.env.GITLAB_TOKEN;
     if (fromEnv) return fromEnv;
 
-    const proc = Bun.spawn(["glab", "config", "get", "token", "--host", "gitlab.com"], {
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    const [out, err, code] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-      proc.exited,
-    ]);
+    // `glab auth login` can store either a long-lived personal access token or a
+    // two-hour OAuth one. `glab config get` reads whatever is stored *without*
+    // refreshing it, so an OAuth token that lapsed since the last `glab` command
+    // would be handed over expired and the scan would fail with a bare 401.
+    if (needsRefresh(await glabConfig("is_oauth2"), await glabConfig("oauth2_expiry_date"))) {
+      await refreshViaGlab();
+    }
+
+    const { out, err, code } = await glab(["config", "get", "token", "--host", HOST]);
     const token = out.trim();
     if (code !== 0 || token === "") {
       const detail = err.trim();

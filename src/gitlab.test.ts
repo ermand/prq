@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
+  needsRefresh,
   concernsViewer,
   gitlab,
   normalizeMergeRequest,
@@ -600,5 +601,39 @@ describe("server-supplied error text", () => {
     expect(error.message).not.toInclude("\u001b");
     expect(error.message).not.toInclude("\u0007");
     expect(error.message).not.toInclude("\n");
+  });
+});
+
+describe("token freshness", () => {
+  // 17:10 local, the moment the real 401 was reproduced.
+  const now = new Date("2026-08-19T17:10:00+02:00");
+
+  test("a personal access token is never refreshed", () => {
+    // PATs are long-lived, and glab stores no expiry for them.
+    expect(needsRefresh("false", "", now)).toBe(false);
+    expect(needsRefresh("false", "2020-01-01T00:00:00+02:00", now)).toBe(false);
+  });
+
+  test("a lapsed OAuth token is refreshed", () => {
+    // The observed failure: `glab config get token` hands back the stored token
+    // without refreshing it, so a token that expired since the last glab command
+    // reached the API dead and the scan failed with a bare 401.
+    expect(needsRefresh("true", "2026-08-19T15:08:00+02:00", now)).toBe(true);
+  });
+
+  test("a live OAuth token is used as it stands", () => {
+    // No wasted round trip in the common case.
+    expect(needsRefresh("true", "2026-08-19T19:08:00+02:00", now)).toBe(false);
+  });
+
+  test("a token about to lapse is refreshed first", () => {
+    // A scan takes seconds and can outlive a token with none left.
+    expect(needsRefresh("true", "2026-08-19T17:10:30+02:00", now)).toBe(true);
+  });
+
+  test("an unreadable expiry is refreshed rather than trusted", () => {
+    // Cannot be shown to be live, and the cost of guessing wrong is a bare 401.
+    expect(needsRefresh("true", "", now)).toBe(true);
+    expect(needsRefresh("true", "not-a-date", now)).toBe(true);
   });
 });
