@@ -62,9 +62,12 @@ mutation was issued.
 - **Stacks exist — ticket 0010's premise is wrong.** `MergeRequest.stack` is a live
   field, populated on **24/100** open `gitlab-org/gitlab` MRs, **24/56** on
   `gitlab-org/cli`, **12/64** on `gitlab-org/gitaly`, and available on Free tier. But it
-  is a *path, not a partition*: `gitaly!8812` appears in three different reported stacks
-  simultaneously, so CONTEXT.md's "a PR is in exactly one stack or none" is false here.
-  It also excludes merged layers, so a partly-landed stack cannot report `5/6`.
+  is a *path through a tree, not a partition*: `gitaly!8812` appears in three different
+  reported stacks simultaneously, so CONTEXT.md's "a PR is in exactly one stack or none"
+  is false here. **Position survives the port; Size does not.** Asking nine MRs of one
+  `gitlab-org/cli` family returns arrays of length 3, 5 and 6 depending on the querier,
+  because the API picks one branch arbitrarily wherever the tree forks above you — and
+  separately, merged layers are excluded. CONTEXT.md's `5/6` has no GitLab denominator.
 - **Two porting traps in the GraphQL shape.** `commits(last: 1)` is the **oldest** commit
   on GitLab (matched `diffHeadSha` 14/40) — the opposite of GitHub; use
   `commits(first: 1)` (40/40) or just `diffHeadSha`. And `Commit.committedDate` returns
@@ -556,7 +559,7 @@ It is populated, common, and available on Free tier. Live incidence over open MR
 | `gitlab-org/gitlab-development-kit` | 26 of 26 | 0 | 26 | 0 |
 | `kesh-back` + `kesh-front` | 8 of 8 | 0 | 8 | 0 |
 
-Five corrections to the field's own description, all observed:
+Six corrections to the field's own description, all observed:
 
 1. **It includes self, despite saying "Other".** Self appeared in the array in **24/24**
    non-empty `gitlab-org/cli` stacks `[LIVE]`; e.g. `gitlab-org/gitlab`!250821 returns
@@ -615,7 +618,45 @@ Five corrections to the field's own description, all observed:
    assertion: if `element[i].sourceBranch !== element[i+1].targetBranch`, the ordering
    assumption has changed underneath us.
 
-5. **It is open-only.** All 107 stack members observed across `gitlab-org/cli` were
+5. **It is one root-to-tip path through a *tree*, so the array length is not the stack's
+   size.** Where the chain forks above you, the API returns one branch and silently drops
+   the others. Live in `gitlab-org/cli`: nine open MRs all report root !3253, with three
+   fork points — !3254 → {3255, 3259}, !3256 → {3257, 3261}, !3257 → {3258, 3260} `[LIVE]`.
+   Asking different members of that one family returns different arrays:
+
+   ```
+   asked !3253  len=6 pos=1  [3253, 3254, 3255, 3256, 3257, 3258]
+   asked !3257  len=6 pos=5  [3253, 3254, 3255, 3256, 3257, 3258]
+   asked !3261  len=5 pos=5  [3253, 3254, 3255, 3256, 3261]
+   asked !3259  len=3 pos=3  [3253, 3254, 3259]
+   asked !3260  len=6 pos=6  [3253, 3254, 3255, 3256, 3257, 3260]
+   ```
+
+   Three distinct lengths — 3, 5, 6 — for a family of **9**. Even the root reports 6.
+
+   **Position is nevertheless trustworthy, by construction rather than by luck.** The
+   *trunk-ward prefix* is unambiguous, because however many branches sprout upward there
+   is exactly one path back down to the trunk. Tested across all 6 stacked families in
+   `gitlab-org/cli` — **57 prefix pairs, 0 inclusion violations** `[LIVE]`: for any two
+   members, one prefix is always a prefix of the other. The 3 equal-depth ties are
+   exactly the 3 fork points (`3254`, `3256`, `3257`), where two siblings share an
+   identical prefix — which is the invariant holding, not an exception to it.
+   `indexOf(self)` is therefore stable across queriers; `stack.length` is not.
+
+   This is an **independent** reason from correction 6 for the same conclusion: even a
+   stack with no merged layers at all still has no reportable size.
+
+   **What to render instead of `n/m`.** The instinct is to degrade — a bare `#4`, or drop
+   the column on GitLab. Better: read `indexOf(self)` as **depth from the trunk** rather
+   than as position-within-a-set. Depth is a well-defined per-MR quantity that survives
+   every defect found here — it needs no denominator, it is stable across queriers by the
+   nesting result above, and it is untouched by merged layers dropping out because those
+   were never counted in it. So `depth 3` is honest where `3/6` is not, and it needs
+   neither a capability probe nor a conditional column. The GitHub side can keep
+   reporting `5/6`; the two are different quantities and should not be forced into one
+   field. Established jointly with GitLabApiScout; see [0019](0019-gitlab-mr-api.md).
+
+6. **It is open-only.** All 107 stack members observed across `gitlab-org/cli` were
    `state: "opened"` `[LIVE]`, matching the "Other **open** merge requests" wording.
    CONTEXT.md's *Position*/*Size* explicitly "count already-merged layers, so a partly
    landed stack still reports `5/6`". GitLab's cannot: as each layer lands, both position
@@ -664,8 +705,8 @@ shared model only as `detailed_merge_status: merge_request_blocked`.
 | `url` | `url` | `webUrl` / REST `web_url` | **supported** |
 | `otherReviews` | opinionated reviews ∖ viewer | (`approvedBy` ∪ `changeRequesters`) ∖ me | **derivable** |
 | **stack membership** | `stack` | `stack` (list of member MRs, includes self) | **supported** |
-| **stack `size`** | `stack.size` (counts merged) | `stack.length` (**open only**) | **derivable**, different quantity |
-| **stack `position`** | `stackEntry.position` (counts merged) | `indexOf(self)` (**open only**) | **derivable**, different quantity |
+| **stack `position`** | `stackEntry.position` (counts merged) | `indexOf(self)` read as **depth from trunk** — trunk-ward prefix proven unambiguous | **derivable** as depth; not as position-within-a-set |
+| **stack `size`** | `stack.size` (counts merged) | — none — `stack.length` is querier-dependent (3, 5 or 6 for one 9-MR family) | **impossible** |
 | **stack identity (`number`)** | `stack.number` | — nothing — | **impossible** |
 | **"exactly one stack per MR"** | invariant holds | invariant **violated** — !8812 in 3 stacks | **impossible** to preserve |
 
@@ -780,6 +821,9 @@ reach.
   stacks; the field's own description is backwards. Recorded here only because it was an
   open question for most of this investigation and the documentation still contradicts
   the observation.
+- ~~What the renderer shows without a denominator~~ — **resolved**, see section 6. The
+  answer is to render *depth*, a different and correct quantity, rather than a degraded
+  `n/m`. Recorded as closed because it was live for part of this investigation.
 - **The `null` branches of `stack` were never observed.** 0 nulls in 246 sampled MRs
   `[LIVE]`. The documented ">20 members returns null" case in particular means a large
   stack degrades to *no stack at all* rather than to a truncated one — untested, and it

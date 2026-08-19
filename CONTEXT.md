@@ -95,10 +95,25 @@ MR can legitimately belong to several stacks at once, it counts only open layers
 and there is no stack identity.
 
 **Position** / **Size**:
-A PR's 1-based place in its stack, and the stack's total length. Both count
-already-merged layers, so a partly-landed stack still reports `5/6`.
+A PR's 1-based place in its stack, and the stack's total length. On GitHub both
+count already-merged layers, so a partly-landed stack still reports `5/6`. GitLab
+counts open layers only and so cannot express that.
+
+**Provider**:
+The forge a row came from — GitHub or GitLab. Each has its own viewer, its own
+credential, and its own baseline; a change diff never spans two.
+_Avoid_: host, remote, source
 
 **Viewer**:
-The authenticated GitHub account the dashboard speaks for — the answer to "me".
-Read from the API, never configured.
+The authenticated account the dashboard speaks for on a given provider — the
+answer to "me". Read from the provider, never configured, and never compared
+across providers.
 _Avoid_: user, me, current user
+
+**Precision**:
+How well a provider filled a field, carried on the row rather than assumed from
+the provider. `exact` is a direct answer; `approximate` is the best available
+proxy; absent means the provider could not tell. It rides on the row because
+capability is **per-project**, not per-provider — a blocking review is reportable
+on a paid GitLab project and invisible on a free one, in the same scan.
+_Avoid_: confidence, quality, fidelity

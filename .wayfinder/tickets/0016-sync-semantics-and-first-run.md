@@ -70,3 +70,25 @@ anything (today it is simply reflected at the next sync, and the stored
 `sync.repos` records the scope each sync covered but is not yet compared), and
 whether the empty-store first run should offer to sync rather than merely
 instructing.
+
+## Amendment — 2026-08-19, from *The provider seam*
+
+A baseline is now **per provider**, which reopens several questions this ticket
+recorded as settled for one:
+
+- **What the header's single age means** when two baselines have different ages.
+  The seam's resolution says show the **oldest**, or show both — never the newest,
+  which would let a stale half hide behind a fresh one. Settle the wording here.
+- **What a first sync is** when one provider has a baseline and the other does not.
+  `baseline set` is currently a whole-store statement; it becomes per-provider, and
+  a run that establishes GitLab's first baseline while diffing GitHub normally
+  needs to say both things without reading as either.
+- **What a partial sync means now.** Previously: one of two searches failed, so
+  nothing is committed. Now a whole provider can fail while the other commits
+  cleanly. `INCOMPLETE — not committed` is no longer accurate as a global label.
+- **Whether `S` syncs everything or one provider.** Syncing all is the obvious
+  default; whether a per-provider sync is worth a key is a real question given one
+  provider may be persistently unreachable.
+- **A failed provider keeps its previous rows on screen.** Dropping them would read
+  as "everything there was merged" — the same fiction the partial-scan rule exists
+  to prevent, in a new shape.

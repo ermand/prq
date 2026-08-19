@@ -63,10 +63,12 @@ credential [LIVE].
 - **GitLab does have MR stacks — but they are not a partition.**
   `MergeRequest.stack: [MergeRequest]` exists and resolves live, so ticket 0010's
   "GitLab has nothing equivalent" is wrong as stated. The real problem is
-  different: `gitaly!8812` appears in three stacks at once and the relation is not
-  symmetric, so it is a **per-MR ancestry path**, not an equivalence class.
-  CONTEXT.md's "a PR is either in exactly one stack or in none" is **false on
-  GitLab**, and merged layers are excluded so `5/6` has no equivalent
+  different: the structure is a **tree**, and `stack` returns one root-to-tip path
+  through it, so `gitaly!8812` appears in three stacks at once and the relation is
+  not symmetric. CONTEXT.md's "a PR is either in exactly one stack or in none" is
+  **false on GitLab**. Practical upshot for the seam: **`position` is derivable
+  (`indexOf(self) + 1`, counting from trunk) but `size` is not** — the array length
+  is one arbitrarily chosen path, and merged layers are excluded besides
   — see [Findings § Stacks](#stacks-are-not-actually-absent).
 
 ## Findings
@@ -584,15 +586,83 @@ Exercised on a project that actually stacks [LIVE,
 
 - **`stack` includes the querying MR itself**, despite the description saying
   "Other" — **24 of 24** non-empty stacks contain the MR that was queried. This is
-  what makes position derivable: `indexOf(self) + 1`. Live: `cli!3744` reports
-  `['3744','3745','3746','3741','3742','3743']` → **1/6**, `cli!3745` → **2/6**,
-  `cli!3746` → **3/6**, `cli!3743` → **6/6**. The order is not monotonic by `iid`,
-  consistent with it being a real dependency order rather than a sort.
+  what makes position derivable: `indexOf(self) + 1`.
+- **The array is a branch chain, and the documented direction is backwards.**
+  Selecting `sourceBranch`/`targetBranch` inside `stack` shows
+  `element[i].sourceBranch === element[i+1].targetBranch` holds exactly, with
+  `element[0].targetBranch` pointing outside the stack — i.e. **index 0 is the
+  layer closest to trunk and the index climbs going up**, the opposite of the
+  field's "ordered from the top of the stack to the bottom". Verified on 4 distinct
+  cli stacks plus `gitlab-org/gitlab!250821` [LIVE]:
+
+```
+cli!3744  members=6  self-index=0
+  [0] !3744  df-mr-03a-policy-core  -> main
+  [1] !3745  df-mr-03b-cache        -> df-mr-03a-policy-core
+  [2] !3746  df-mr-03c-rest         -> df-mr-03b-cache
+  [3] !3741  df-mr-04-proxy         -> df-mr-03c-rest
+  [4] !3742  df-mr-05-fsx           -> df-mr-04-proxy
+  [5] !3743  df-mr-06-pm-core       -> df-mr-05-fsx
+
+gitlab-org/gitlab!250821  members=7  self-index=3   (mid-stack, so the array is
+  [0] !250227 ...add-flow-schedules-table -> master   the whole chain, not a
+  ...                                                 prefix or suffix of it)
+```
+
+  Happy outcome: `indexOf(self) + 1` counts **from the bottom**, which is exactly
+  CONTEXT.md's reading of *Position*, so the naive derivation is right despite the
+  documentation. The chain equality is also a cheap runtime assertion if the
+  ordering ever flips.
+- **Position is derivable; size is not.** The underlying structure is a **tree**,
+  and `stack` returns *one* root-to-tip path through it that passes through the
+  queried MR, picking a branch arbitrarily where the tree forks above you. In
+  `gitlab-org/cli`, nine open MRs share root `!3253` and produce **four different
+  arrays** [LIVE]:
+
+```
+asked !3259 -> len=3 ['3253','3254','3259']                      self-index=2
+asked !3261 -> len=5 ['3253','3254','3255','3256','3261']        self-index=4
+asked !3260 -> len=6 ['3253','3254','3255','3256','3257','3260'] self-index=5
+asked !3253 -> len=6 ['3253','3254','3255','3256','3257','3258'] self-index=0
+```
+
+  Resolving the branches confirms three fork points — `!3254 -> {3255, 3259}`,
+  `!3256 -> {3257, 3261}`, `!3257 -> {3258, 3260}` [LIVE]. So the array **length is
+  not the stack's size** — it is the length of one arbitrarily chosen path. Asking
+  the root `!3253` returns 6 while the family actually contains 9 MRs. CONTEXT.md
+  pairs *Position* and *Size*; **GitLab supports the first and not the second.**
+- **Position is safe by construction, not by luck: the trunk-ward prefixes are
+  strictly nested.** Taking each querier's ancestry prefix — the elements before
+  itself — the prefixes of a family are totally ordered by inclusion, so every
+  querier at depth *d* sees the identical first *d* elements. Checked across
+  **all 6 stacked families in `gitlab-org/cli` (56 open MRs, 24 stacked): 57
+  prefix pairs, 0 nesting violations** [LIVE]. The `!3253` family:
+
+```
+!3253  depth=0  prefix=[]
+!3254  depth=1  prefix=['3253']
+!3259  depth=2  prefix=['3253','3254']            <- two queriers, same prefix,
+!3255  depth=2  prefix=['3253','3254']               divergent tails
+!3256  depth=3  prefix=['3253','3254','3255']
+!3261  depth=4  prefix=['3253','3254','3255','3256']
+!3257  depth=4  prefix=['3253','3254','3255','3256']
+!3260  depth=5  prefix=['3253','3254','3255','3256','3257']
+!3258  depth=5  prefix=['3253','3254','3255','3256','3257']
+```
+
+  That is the structural reason the split falls where it does: however many
+  branches sprout upward, there is exactly **one path down to trunk**, so the
+  prefix cannot be querier-dependent even though the suffix is. `indexOf(self)` is
+  therefore better understood as **depth from trunk** — a well-defined per-MR
+  quantity — rather than a position within a set whose size is unknowable.
+  Prefix-nesting was raised by `GitLabReviewScout` and generalised here from one
+  family to all six.
 - **Unstacked returns `[]`, not `null`** — 0 nulls in 56 sampled, so the
   documented null is at most the >20 truncation case, which stays unverified.
 - **Every member observed was `state: opened`.** Merged layers are excluded, so
   CONTEXT.md's "both count already-merged layers, so a partly-landed stack still
-  reports `5/6`" has **no GitLab equivalent**. GitLab's size shrinks as layers land.
+  reports `5/6`" has **no GitLab equivalent** — a second, independent reason the
+  size half of *Position/Size* cannot be carried over.
 - **`stack` is not a partition, and the relation is not even symmetric.** This is
   the finding that breaks the model, not the shape mismatch. In `gitlab-org/gitaly`
   [LIVE, `mergeRequests(iids:["8812","9094","8918","8821"])`]:
@@ -606,16 +676,61 @@ gitaly!8812  poc/scaling-git                    -> master           stack=['8812
 
   `!8812` sits in **three different stacks at once**, and it does not reciprocate:
   `!9094` reports `[8812, 9094]` while `!8812` reports `[8812, 8821]`. So
-  `A ∈ stack(B)` does **not** imply `B ∈ stack(A)`. It is a **per-MR ancestry path**
+  `A ∈ stack(B)` does **not** imply `B ∈ stack(A)` — unsurprising once the tree
+  structure above is established, since two MRs on different branches of the same
+  tree each see their own path. It is a **per-MR ancestry path**
   — the chain from this MR down to trunk — not an equivalence class. CONTEXT.md's
   "A PR is either in exactly one stack or in none" is **false on GitLab**, and a
   global stack graph cannot be reconstructed by unioning per-MR stacks. Any shared
   model field must therefore be per-MR (`position`, `depth`), never a stack
   identity.
 
-The >20 truncation remains a real edge the seam should name. Verification of the
-non-partition and self-inclusion findings was prompted by `GitLabReviewScout`
-(ticket 0020) and re-run independently here.
+#### What this means for the seam
+
+Ticket 0010 asks how a capability a provider lacks is expressed. Stacks turn out
+to be the sharp case it predicted, but not in the way it predicted — the answer is
+**not** an absent field or a capability flag, because GitLab is not missing the
+feature. It answers a *different question*. [INFERENCE, from the tagged facts above]
+
+- GitHub answers "where are you in this stack, and how big is it" — `5/6`, counting
+  merged layers, over a set a PR belongs to exactly once.
+- GitLab answers "how far above trunk are you" — depth, over a per-MR ancestry path,
+  with no meaningful denominator and merged layers already gone.
+
+Collapsing these into one model field is the trap. A shared `{ position, size }`
+forces GitLab to invent a size, and every available candidate is wrong: the array
+length is one arbitrarily chosen branch, and the true descendant count is not
+fetchable from the MR at all. The honest shape is **two quantities, not one field
+unified across providers** — GitHub keeps reporting `5/6`, GitLab reports a depth,
+and the renderer is told which it has rather than being handed a lowest common
+denominator that is accurate for neither. Ticket 0020 owns the rendering decision
+and has taken this reading.
+
+**This generalises, and it is the actual answer to 0010's question.** The hard case
+is not a provider *missing* a capability — that is easy, and a boolean handles it.
+It is a provider **answering a different question through a same-looking field**. A
+capability flag cannot express that, because flags say yes/no where the honest
+signal is *which quantity do I have*. The same shape appears twice in this
+document, arrived at independently:
+
+| Field | Looks like | Actually |
+| --- | --- | --- |
+| `stack` | GitHub's stack membership | a per-MR ancestry path — gives depth, not position-in-a-set |
+| `changeRequesters` | a list of change requesters | `null` vs `[]` distinguishes *cannot express change requests* from *none yet* |
+
+In both, **absence carries information** rather than marking a gap: a `null`
+`changeRequesters` is not missing data, it is the project telling you the concept
+does not exist there. So the seam wants **discriminated values the renderer
+branches on**, not optional fields it null-checks and not a capability table it
+consults up front — the capability is already in the payload, and reducing it to a
+flag discards the part that matters. [INFERENCE, from the tagged facts above;
+generalisation raised by `GitLabReviewScout`]
+
+The >20 truncation remains a real edge the seam should name. The non-partition,
+self-inclusion, chain-direction and prefix-nesting findings were each prompted by
+`GitLabReviewScout` (ticket 0020) and re-run independently here; the tree/one-path
+behaviour, the position-versus-size split and the depth reframing came out of
+widening those checks.
 
 ### 6. Paging and cost
 

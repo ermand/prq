@@ -72,3 +72,32 @@ Still genuinely undecided: whether to keep more than one generation, retention
 and pruning, whether the raw response should be stored alongside the derived
 model, and what happens on a second sync in a row (today the previous diff is
 simply replaced and lost).
+
+## Amendment — 2026-08-19, from *The provider seam*
+
+The implemented schema assumes **one** provider and **one** baseline. Both are now
+wrong, and this ticket must resolve the shape rather than let the code drift.
+
+- **`sync` and `pr` need a provider dimension.** Each provider commits its own
+  baseline independently, so "the last sync" is per-provider and `lastSync()`
+  returning a single row is no longer meaningful.
+- **A change diff never spans providers.** `change.sync_id` already scopes to one
+  sync; with per-provider syncs that becomes the enforcement point.
+- **The primary key stays the provider's node id.** Ids cannot collide —
+  `gid://gitlab/MergeRequest/508789770` versus `PR_kwDOJL_VMc69ZXcv`, verified
+  live — so `provider` is a column for scoping and display, not for uniqueness.
+- **`baselineReset` becomes per-provider.** Adding a GitLab project to a config
+  that has only ever synced GitHub means one provider has a baseline and the other
+  does not, in the same store, at the same time. Today's single boolean cannot say
+  that.
+- **`prCount` is the shortfall detector** and is compared against the rows read
+  back. It must count per provider, or a provider that legitimately returned zero
+  will read as a dropped baseline.
+- **The stored payload changes shape** — `staleBlock` becomes an object or null,
+  `stack` becomes plural `stacks`. That is a `SCHEMA_VERSION` bump, and the
+  existing migration path (drop current state, keep history, reset the baseline) is
+  exactly what it was built for.
+
+Retention gains an angle it did not have: two providers means roughly twice the
+change rows, and GitLab's lazily computed fields will generate churn until the
+suppression rules from 0021 are in place.

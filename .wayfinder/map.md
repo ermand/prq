@@ -161,6 +161,19 @@ both belong here rather than in a ticket:
   `Z`. GitLab's `committedDate` carries offsets: `2026-04-16T17:54:22+02:00` is
   15:54Z and so precedes `16:23:37Z` while sorting after it. Timestamps are now
   canonicalised to UTC in `normalize`.
+- [The provider seam GitLab would implement](./tickets/0010-provider-seam.md)
+  — one operation, `scanProvider(projects) -> { rows, failed }`, with each provider
+  owning its own query shape rather than a shared query language. **A baseline per
+  provider**: GitLab failing never freezes GitHub's diff, which matters because the
+  driver's GitLab token already expired once and all-or-nothing would have frozen
+  29 PRs over 8 MRs. **The union model with per-row precision**, not the
+  intersection — reducing to what both can express would degrade the GitHub board
+  and specifically weaken bucket 2. Precision rides on the **row**, because
+  capability is per-*project*: a blocking review is reportable on a paid GitLab
+  project and invisible on a free one within one scan. `staleBlock` becomes
+  `{value, precision} | null`; `stack` becomes plural `stacks`, since GitLab
+  membership is a path rather than a partition. Viewer and credential are
+  per-provider. Amends 0014, 0016 and 0004.
 
 ## Not yet specified
 
