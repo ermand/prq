@@ -22,8 +22,10 @@ gitlab:
   - group/subgroup/project   # nested as deeply as your groups go
 
 # Optional. Omit for ~/.local/state/prq/state.db.
-# A relative path resolves against the directory you run prq from.
-statePath: .prq/state.db
+# MUST be absolute if you install prq on your PATH — a relative path resolves
+# against the directory you run it from, so a global command would silently create
+# a fresh empty database wherever you happen to be.
+statePath: /abs/path/to/prq/.prq/state.db
 ```
 
 Either key may be omitted. Provider is declared by which list an entry sits in,
@@ -40,7 +42,46 @@ not when its stored config is merely read, so the token is checked for staleness
 and refreshed through `glab` before a scan uses it. Without that, a sync more than
 two hours after your last `glab` command failed with a bare `401`.
 
+## Installing
+
+```bash
+bun link        # puts `prq` on your PATH
+bun unlink      # removes it
+```
+
+That symlinks `prq` into bun's global bin directory, pointing at the source. Edits
+take effect immediately, with no rebuild — and it is the *faster* option, which is
+not the obvious answer. Measured on an M4 Pro, five runs each:
+
+| | startup | size |
+| --- | --- | --- |
+| `bun src/cli.ts` (linked) | 0.12s | — |
+| `bun run build` binary | 0.29s, 1.72s cold | 73 MB |
+
+The standalone binary pays 2.4x the startup to page in 73 MB, and needs rebuilding
+after every change. Its one advantage is needing no bun at runtime:
+
+```bash
+bun run build            # -> dist/prq, a self-contained binary
+cp dist/prq ~/.local/bin # for a machine without bun
+```
+
+Because the link points into this checkout, moving or deleting the directory
+breaks the command — run `bun link` again from the new location. Whichever you use,
+`prq --help` prints the config and state paths actually in force, which is the way
+to check what a global install is really reading.
+
+After `bun unlink` your shell may still run the old path from its command hash, so
+`prq` appears to survive removal. `hash -r` clears it.
+
 ## Running
+
+```bash
+prq              # open the dashboard
+prq sync         # sync now, then report what changed
+```
+
+Without installing, the same two from inside the checkout:
 
 ```bash
 bun start        # open the dashboard
@@ -49,7 +90,7 @@ bun run sync     # sync now, from the shell
 
 **Launch never touches the network.** It reads the last synced state and paints
 instantly. Syncing is always something you ask for — press `S` in the dashboard,
-or run `bun run sync`. That is the whole point: you own the baseline, so a
+or run `prq sync`. That is the whole point: you own the baseline, so a
 refresh you did not ask for cannot destroy the diff of what changed.
 
 On a first run the store is empty, so the dashboard has nothing to show until you

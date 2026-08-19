@@ -209,6 +209,16 @@ both belong here rather than in a ticket:
   invariant. Separately, that project's rich selection **times out server-side** —
   GitLab answers HTTP 200 with 51 `errors[]` entries and partial data, which the
   scan refuses rather than committing.
+- **Installed by linking the source, not by shipping the binary** — the opposite of
+  what the tech-stack survey assumed. Measured on this machine, five runs each:
+  `bun src/cli.ts` starts in **0.12s**, the 73MB compiled binary in **0.29s**, with
+  a 1.72s cold first run while it pages in. So compiling costs 2.4x the startup,
+  73MB, and a rebuild after every edit, and buys only independence from the bun
+  runtime. `bun link` is therefore the install and `bun run build` stays for
+  machines without bun. One consequence found by installing: a **relative
+  `statePath` is incompatible with a global command**, because it resolves against
+  the caller's directory and silently creates an empty database there. Absolute
+  paths only, once the tool is on `PATH`.
 
 ## Not yet specified
 
@@ -233,9 +243,6 @@ both belong here rather than in a ticket:
 - **First-run and empty states.** No repos saved yet, and a saved repo with zero
   open PRs. Hangs on how the repo list is managed. Note the empty-*store* first
   run has graduated into *What sync is, and what the first one does*.
-- **Distribution and install.** Homebrew, `go install`, npm, a single binary.
-  Hangs on the tech stack choice. Measured binary sizes now span 743KB (Rust) to
-  70MB (OpenTUI), so this is a real axis rather than a footnote.
 - **Colour, theming, and terminal capability fallbacks.** Hangs on the layout.
 - **Team-routed review requests.** `team-review-requested:<org>/<team>` is a valid
   qualifier but needs team slugs, which the repo list does not carry. Surfaced by
