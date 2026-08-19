@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { performSync } from "./cli";
+import { parseArgs, performSync } from "./cli";
 import { normalize, type PullRequest, type RawPullRequest } from "./domain";
 import { Store } from "./store";
 
@@ -176,5 +176,46 @@ describe("performSync", () => {
     expect(outcome.baselineReset).toBe(true);
     expect(outcome.changes).toEqual([]);
     store.close();
+  });
+});
+
+describe("parseArgs", () => {
+  test("finds the subcommand before a flag", () => {
+    expect(parseArgs(["sync"]).command).toBe("sync");
+    expect(parseArgs(["init"]).command).toBe("init");
+  });
+
+  test("finds the subcommand after a flag and its value", () => {
+    // Read positionally, `--state x sync` silently opened the dashboard.
+    expect(parseArgs(["--state", "/tmp/a.db", "sync"])).toEqual({
+      command: "sync",
+      statePath: "/tmp/a.db",
+    });
+  });
+
+  test("finds a flag after the subcommand too", () => {
+    expect(parseArgs(["sync", "--state", "/tmp/a.db"])).toEqual({
+      command: "sync",
+      statePath: "/tmp/a.db",
+    });
+  });
+
+  test("no subcommand means the dashboard", () => {
+    expect(parseArgs([]).command).toBeUndefined();
+    expect(parseArgs(["--state", "/tmp/a.db"]).command).toBeUndefined();
+  });
+
+  test("never mistakes the flag's value for the subcommand", () => {
+    expect(parseArgs(["--state", "sync"]).command).toBeUndefined();
+    expect(parseArgs(["--state", "sync"]).statePath).toBe("sync");
+  });
+
+  test("rejects a missing or flag-shaped path", () => {
+    expect(() => parseArgs(["--state"])).toThrow(/needs a path/);
+    expect(() => parseArgs(["--state", "--help"])).toThrow(/needs a path/);
+  });
+
+  test("ignores unrelated flags", () => {
+    expect(parseArgs(["--json", "sync"]).command).toBe("sync");
   });
 });

@@ -121,8 +121,15 @@ export class Store {
     if (path !== ":memory:") {
       const dir = dirname(path);
       await mkdir(dir, { recursive: true, mode: 0o700 });
-      // mkdir's mode does not apply to a directory that already exists.
-      await chmod(dir, 0o700);
+      try {
+        // mkdir's mode does not apply to a directory that already exists, so
+        // tighten it — but best-effort: the caller may point `statePath` at a
+        // directory that is not ours to change, and /tmp refuses outright.
+        // The 0600 on the files below is the protection that actually matters.
+        await chmod(dir, 0o700);
+      } catch {
+        // Not ours to tighten. Leave it as the owner set it.
+      }
     }
     const db = new Database(path, { create: true });
     // Ordered deliberately: SQLite copies the database's mode onto the -wal and

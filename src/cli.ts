@@ -101,15 +101,33 @@ async function initConfig(): Promise<void> {
   process.stdout.write(`wrote ${path}\n`);
 }
 
+/** Splits argv into the subcommand and the `--state` override, in any order. */
+export function parseArgs(argv: string[]): {
+  command: string | undefined;
+  statePath: string | undefined;
+} {
+  let statePath: string | undefined;
+  const positional: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i]!;
+    if (arg === "--state") {
+      const value = argv[++i];
+      if (value === undefined || value.startsWith("-")) {
+        throw new Error("--state needs a path");
+      }
+      statePath = value;
+      continue;
+    }
+    // Read positionally, the subcommand was invisible behind a preceding flag:
+    // `prq --state x sync` silently opened the dashboard instead of syncing.
+    if (!arg.startsWith("-")) positional.push(arg);
+  }
+  return { command: positional[0], statePath };
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
-
-  const flagIndex = args.indexOf("--state");
-  const override = flagIndex === -1 ? undefined : args[flagIndex + 1];
-  if (flagIndex !== -1 && (override === undefined || override.startsWith("-"))) {
-    throw new Error("--state needs a path");
-  }
-
+  const { command, statePath: override } = parseArgs(args);
   if (args.includes("--help") || args.includes("-h")) {
     // Reports the path actually in force, not the default — otherwise a
     // configured store is invisible in the one place people look for it.
@@ -131,7 +149,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  if (args[0] === "init") {
+  if (command === "init") {
     await initConfig();
     return;
   }
@@ -144,7 +162,7 @@ async function main(): Promise<void> {
   // Every path out of here must close the store, or the WAL sidecars outlive
   // the process still carrying a copy of the data.
   try {
-    if (args[0] === "sync") {
+    if (command === "sync") {
       const outcome = await performSync(store, config.repos);
       for (const failure of outcome.failures) {
         process.stderr.write(`INCOMPLETE — ${failure}\n`);
