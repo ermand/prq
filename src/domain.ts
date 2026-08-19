@@ -113,6 +113,25 @@ export function safeUrl(raw: unknown): string | null {
   }
 }
 
+/**
+ * Normalises a timestamp to UTC ISO-8601 with a `Z` suffix.
+ *
+ * Everything downstream orders timestamps by **string** comparison — the bucket
+ * sorts, the flat view, the age display. That is only equivalent to chronological
+ * order when every value shares one offset. GitHub returns `Z` throughout, but
+ * GitLab does not: `committedDate` comes back as `2026-04-16T17:54:22+02:00`,
+ * which is 15:54Z and therefore *earlier* than a sibling `16:23:37Z` while
+ * sorting *later* lexicographically. Canonicalising here keeps the cheap string
+ * comparisons correct for any provider.
+ *
+ * An unparseable value is passed through rather than discarded: it is display
+ * data, and losing a PR over a malformed date would be worse than mis-sorting it.
+ */
+export function canonicalTime(raw: string): string {
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? raw : parsed.toISOString();
+}
+
 export function toVerdict(reviewDecision: string | null): Verdict {
   switch (reviewDecision) {
     case "APPROVED":
@@ -200,8 +219,8 @@ export function normalize(pr: RawPullRequest, viewer: string): PullRequest {
     url: safeUrl(pr.url),
     repo: sanitize(pr.repository.nameWithOwner),
     author: sanitize(pr.author?.login ?? "ghost"),
-    createdAt: pr.createdAt,
-    updatedAt: pr.updatedAt,
+    createdAt: canonicalTime(pr.createdAt),
+    updatedAt: canonicalTime(pr.updatedAt),
     headOid: pr.headRefOid,
     baseRef: sanitize(pr.baseRefName),
     draft: pr.isDraft,

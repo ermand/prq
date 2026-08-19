@@ -24,6 +24,20 @@ documented as impossible — *The shape of the GitHub Pull Request Stacks API*
 found that automatic retargeting is invisible to the API and can only be seen by
 diffing against a prior scan.
 
+**Widened 2026-08-19: GitLab is in scope.** The driver reversed the GitHub-only
+call, so merge requests sit in the same list as pull requests, in the same
+buckets, opened by the same keystroke. This is a scope reversal rather than an
+addition, and the two providers do not map cleanly, so the provider seam must be
+resolved before any GitLab code exists.
+
+Measured before committing to it, and worth keeping in view: the driver has **8
+open MRs on GitLab, all authored by them, 0 with review requested, 0 assigned**,
+across two projects (`albanian-technology-distribution/kesh/kesh-back` and
+`kesh-front`). GitLab therefore populates buckets 3, 4 and 5 — *Mine, …* — and
+leaves the entire review side empty. That does not make it not worth doing; it
+does mean the review-shaped parts of the taxonomy will go unexercised on GitLab
+for now, and should not be over-designed on guesses.
+
 ## Notes
 
 - **Domain**: developer tooling / terminal UI over the GitHub API via `gh`.
@@ -41,8 +55,8 @@ diffing against a prior scan.
 - **Environment facts already established** (do not re-litigate):
   - `gh` 2.96.0, authenticated as **ermand**; token scopes include `repo`,
     `read:org`.
-  - `glab` 1.110.0, authenticated as **ermandduro** — reachable, but GitLab is
-    out of scope for v1.
+  - `glab` 1.114.0, authenticated as **ermandduro** (user id 830730). GitLab is
+    in scope as of 2026-08-19.
   - Available runtimes: Bun 1.3.14, Node 24.15.0, Go, Cargo 1.84.1, Python 3.14.6.
   - GitHub **Pull Request Stacks** entered public preview 2026-07-30 with REST
     endpoints for listing/getting stacks and a `stack` object on the PR resource;
@@ -125,6 +139,28 @@ both belong here rather than in a ticket:
   distribution retroactively justifies the amendment to 0007 admitting `none`
   into *Mine, ready to land*: without it, essentially every PR of the driver's
   would be unable to reach that bucket.
+- [How GitLab is queried for the merge requests that concern me](./tickets/0019-gitlab-mr-api.md)
+  — one GraphQL query, `projects(fullPaths: [...]) { mergeRequests }`, complexity
+  independent of project count: 1 request and 0.82–0.96s against 18 requests and
+  11.63s for REST at equal fidelity. **`involves:@me` has no GitLab equivalent and
+  cannot have one** — mentions and commenter are unfilterable in both APIs, proven
+  by exhaustion, so the GitLab scan inverts GitHub's into fetch-then-filter on
+  `commenters`/`participants`. Three silent traps recorded, including REST
+  ignoring unknown filters with a 200.
+- [What GitLab can say about a merge request's state](./tickets/0020-gitlab-review-model.md)
+  — every axis is supported or derivable except `i-commented`, which is impossible
+  at scan cost. **`REQUESTED_CHANGES` exists but is tier-gated**, and the driver's
+  own projects are Free, so bucket 2 is structurally unreachable there.
+  **`staleBlock` degrades from exact to approximate**: GitLab attaches no commit to
+  a review state, so it becomes timestamp-based and 20% undecidable. Five lazily
+  computed fields named. `MergeRequest.stack` exists but is a **path, not a
+  partition** — one MR can sit in several stacks, counts only open layers, and has
+  no identity, which falsified `CONTEXT.md` and is now corrected there.
+- **A latent bug in shipped GitHub code, found by porting.** Every sort compared
+  timestamps as raw strings, which is only chronological while every value ends in
+  `Z`. GitLab's `committedDate` carries offsets: `2026-04-16T17:54:22+02:00` is
+  15:54Z and so precedes `16:23:37Z` while sorting after it. Timestamps are now
+  canonicalised to UTC in `normalize`.
 
 ## Not yet specified
 
@@ -157,9 +193,15 @@ both belong here rather than in a ticket:
 
 <!-- ruled beyond the destination; closed, never graduates -->
 
-- **GitLab MR support and GitLab stack inference** — v1 is GitHub-only; the spec
-  defines the provider seam but proves it against GitHub alone. A GitLab
-  implementation is a fresh effort.
+- ~~**GitLab stack inference**~~ — **retracted 2026-08-19, the premise was false.**
+  This was ruled out on the grounds that GitLab has no equivalent of GitHub's
+  stacks and one would have to be inferred from branch chains. Introspection of
+  the live schema disproves it: `MergeRequest.stack: [MergeRequest!]` exists on a
+  129-field type, alongside `approvalState`, `conflicts`, `detailedMergeStatus`,
+  `diffHeadSha`, `headPipeline`, `reviewers`, `commenters` and `participants`.
+  Nothing needs inferring. Whether GitLab stacks are *rendered* is a live question
+  for [How a stack renders in a flat PR list](./tickets/0008-stack-rendering.md)
+  and the provider seam, not a scope boundary.
 - **Any write to GitHub** — approve, comment, merge, re-request review. The TUI
   shows state; the browser link is the action.
 - **Background daemon and desktop notifications** — v1 is a TUI you open.

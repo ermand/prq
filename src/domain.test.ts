@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   bucketOf,
+  canonicalTime,
   compareWithin,
   flatten,
   groupIntoBuckets,
@@ -469,5 +470,41 @@ describe("isPullRequest", () => {
     expect(isPullRequest({ ...good, stack: { number: 1 } })).toBe(false);
     expect(isPullRequest(null)).toBe(false);
     expect(isPullRequest("nope")).toBe(false);
+  });
+});
+
+describe("canonicalTime", () => {
+  test("rewrites an offset timestamp to UTC", () => {
+    // Every sort downstream compares these as strings, which is only
+    // chronological when the offset is uniform. GitLab returns offsets.
+    expect(canonicalTime("2026-04-16T17:54:22+02:00")).toBe("2026-04-16T15:54:22.000Z");
+    expect(canonicalTime("2026-01-30T15:20:18+01:00")).toBe("2026-01-30T14:20:18.000Z");
+  });
+
+  test("leaves a Z timestamp chronologically equivalent", () => {
+    expect(canonicalTime("2026-04-16T16:23:37Z")).toBe("2026-04-16T16:23:37.000Z");
+  });
+
+  test("makes string order match chronological order across offsets", () => {
+    // The concrete trap: 17:54+02:00 is 15:54Z, so it precedes 16:23Z — but the
+    // raw strings sort the other way.
+    const earlier = "2026-04-16T17:54:22+02:00";
+    const later = "2026-04-16T16:23:37Z";
+    expect(earlier > later).toBe(true); // raw: wrong
+    expect(canonicalTime(earlier) < canonicalTime(later)).toBe(true); // canonical: right
+  });
+
+  test("passes an unparseable value through rather than losing the PR", () => {
+    expect(canonicalTime("not a date")).toBe("not a date");
+    expect(canonicalTime("")).toBe("");
+  });
+
+  test("normalize canonicalises both timestamps", () => {
+    const p = normalize(
+      raw({ createdAt: "2026-04-16T17:54:22+02:00", updatedAt: "2026-04-16T18:00:00+02:00" }),
+      VIEWER,
+    );
+    expect(p.createdAt).toBe("2026-04-16T15:54:22.000Z");
+    expect(p.updatedAt).toBe("2026-04-16T16:00:00.000Z");
   });
 });

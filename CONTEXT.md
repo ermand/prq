@@ -84,10 +84,15 @@ has pushed since. The dashboard's most actionable state, because the author is
 waiting on you and cannot tell.
 
 **Stack**:
-GitHub's first-class ordered chain of dependent PRs, each based on the one below.
-A PR is either in exactly one stack or in none. Not to be confused with a branch
-chain that merely looks like one — membership is what the API reports, not what
-the PR description claims.
+An ordered chain of dependent PRs, each based on the one below. Membership is what
+the API reports, never what the description claims.
+
+The two providers disagree on its shape, and the glossary cannot yet say which
+meaning wins — that is [0021](.wayfinder/tickets/0021-gitlab-state-mapping.md).
+On **GitHub** a PR is in exactly one stack or none, and the stack has an identity
+and a number. On **GitLab** `MergeRequest.stack` is a *path*, not a partition: one
+MR can legitimately belong to several stacks at once, it counts only open layers,
+and there is no stack identity.
 
 **Position** / **Size**:
 A PR's 1-based place in its stack, and the stack's total length. Both count
