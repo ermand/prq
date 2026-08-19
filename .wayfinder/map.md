@@ -174,6 +174,17 @@ both belong here rather than in a ticket:
   `{value, precision} | null`; `stack` becomes plural `stacks`, since GitLab
   membership is a path rather than a partition. Viewer and credential are
   per-provider. Amends 0014, 0016 and 0004.
+- [How a saved entry declares which provider it belongs to](./tickets/0022-declaring-a-provider.md)
+  — **two lists**, `github:` and `gitlab:`, so provider is structural rather than
+  parsed. Depth inference was ruled out by evidence: `gitlab-org/gitlab` is depth 2,
+  identical in shape to a GitHub `owner/repo`. **Validation is per-provider because
+  the risk is** — GitHub's path is interpolated into a `repo:` qualifier and stays
+  strictly `owner/name`, GitLab's is a bound GraphQL variable and only needs typo
+  checks. Config keyed by path, store still keyed by node id, so a renamed project
+  loses its entry but keeps its history. **`projects(fullPaths:)` silently omits a
+  path it cannot see** — HTTP 200, no error — so the scan must diff requested
+  against returned paths and treat a missing one as a provider failure, or a typo
+  reads as "no open MRs". `repos:` is retired loudly, not aliased.
 
 ## Not yet specified
 

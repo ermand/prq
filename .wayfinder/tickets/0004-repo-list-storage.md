@@ -63,3 +63,24 @@ titles, so a project-local `statePath` needs `.gitignore` coverage. The repo now
 ignores `*.db`, its WAL sidecars and `.prq/`, but a *user* pointing `statePath` at
 someone else's project gets no such protection. Whether the tool should refuse to
 write inside a git working tree that does not ignore it is an open question.
+
+## Amendment — 2026-08-19, from *How a saved entry declares which provider it belongs to*
+
+The single flat `repos:` list is **retired**. The config becomes two keys,
+`github:` and `gitlab:`, each validated by its own pattern — strict `owner/name`
+for GitHub because its path is interpolated into a search qualifier, looser for
+GitLab because its path is a bound GraphQL variable and cannot alter the query.
+
+Loading a config that still has `repos:` **fails loudly** rather than assuming
+GitHub. That reverses the tolerance this ticket recorded for a stale
+`cacheTtlMinutes`, deliberately: an ignored key that no longer does anything is
+harmless, whereas `repos:` would still look load-bearing.
+
+`statePath` is unaffected.
+
+Still open here, and now sharper with two providers: whether entries can be
+grouped, whether a display name is worth having when a GitLab path is three
+segments and eats the row width, and whether in-TUI editing is ever wanted.
+See the resolution of 0022 for what an unreachable entry must do — GitLab omits
+unknown paths silently, so the config being wrong is a scan failure rather than an
+empty result.
