@@ -20,6 +20,16 @@ const STANDING: Record<PullRequest["standing"], string> = {
   "not-involved": "not involved",
 };
 
+/**
+ * Abbreviates a git object id, and only an object id. A `pushed-while-blocked`
+ * change carries two full 40-character head oids, which wrapped over three
+ * lines and buried the change it was describing. Anything that is not plainly
+ * an oid — a verdict, a bucket number, a branch name — is left alone.
+ */
+function short(value: string): string {
+  return /^[0-9a-f]{20,}$/.test(value) ? value.slice(0, 12) : value;
+}
+
 export function Detail({
   pr,
   changes,
@@ -34,7 +44,7 @@ export function Detail({
   return (
     <div className="flex h-full flex-col">
       <div className="border-b border-zinc-800 p-4">
-        <div className="flex items-center gap-2 font-mono text-[11px] text-zinc-500">
+        <div className="flex items-center gap-2 font-mono text-2xs text-zinc-500">
           <span>{providerLabel(pr.provider)}</span>
           <span className="truncate">{pr.repo}</span>
           <span className="text-zinc-400">#{pr.number}</span>
@@ -45,7 +55,7 @@ export function Detail({
           // than rendering a dead control.
           <p className="mt-2 text-base leading-snug font-medium text-zinc-100">
             {pr.title}
-            <span className="mt-1 block text-[11px] font-normal text-rose-400">
+            <span className="mt-1 block text-2xs font-normal text-rose-400">
               no usable link — the API returned an address that was not https
             </span>
           </p>
@@ -89,7 +99,7 @@ export function Detail({
 
       {pr.staleBlock !== null && (
         <div className="border-b border-zinc-800 p-4">
-          <h3 className="text-[11px] font-semibold tracking-wide text-zinc-500 uppercase">
+          <h3 className="text-2xs font-semibold tracking-wide text-zinc-500 uppercase">
             My block
           </h3>
           <p className="mt-1.5 text-xs text-zinc-300">
@@ -108,7 +118,7 @@ export function Detail({
 
       {pr.stacks.length > 0 && (
         <div className="border-b border-zinc-800 p-4">
-          <h3 className="text-[11px] font-semibold tracking-wide text-zinc-500 uppercase">
+          <h3 className="text-2xs font-semibold tracking-wide text-zinc-500 uppercase">
             Stacks
           </h3>
           <ul className="mt-2 space-y-1.5">
@@ -118,7 +128,7 @@ export function Detail({
                   {stack.position}/{stack.size}
                   {stack.precision === "approximate" && "~"}
                 </Badge>
-                <span className="truncate font-mono text-[11px] text-zinc-500">
+                <span className="truncate font-mono text-2xs text-zinc-500">
                   {stack.id}
                 </span>
               </li>
@@ -128,7 +138,7 @@ export function Detail({
       )}
 
       <div className="p-4">
-        <h3 className="text-[11px] font-semibold tracking-wide text-zinc-500 uppercase">
+        <h3 className="text-2xs font-semibold tracking-wide text-zinc-500 uppercase">
           Since the last sync
         </h3>
         {changes.length === 0 ? (
@@ -138,15 +148,15 @@ export function Detail({
             {changes.map((change) => (
               <li key={change.kind} className="flex items-baseline gap-2 text-xs">
                 <Badge tone="urgent">{label(change.kind)}</Badge>
-                <span className="text-zinc-400">
+                <span className="min-w-0 text-zinc-400">
                   {change.from !== null && change.to !== null ? (
                     <>
-                      <span className="text-zinc-500">{change.from}</span>
+                      <span className="text-zinc-500">{short(change.from)}</span>
                       {" → "}
-                      <span className="text-zinc-200">{change.to}</span>
+                      <span className="text-zinc-200">{short(change.to)}</span>
                     </>
                   ) : (
-                    (change.to ?? change.from ?? "")
+                    short(change.to ?? change.from ?? "")
                   )}
                 </span>
               </li>

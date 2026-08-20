@@ -92,7 +92,7 @@ export function Row({
             exactly the part that tells `kesh-back` from `kesh-front`. */}
         <span
           title={pr.repo}
-          className="flex shrink-0 items-baseline gap-1.5 font-mono text-[11px] text-zinc-500 lg:w-[14rem] xl:w-[18rem] 2xl:w-[22rem]"
+          className="flex shrink-0 items-baseline gap-1.5 font-mono text-2xs text-zinc-500 lg:w-[14rem] xl:w-[18rem] 2xl:w-[22rem]"
         >
           <span className="shrink-0 text-zinc-600">
             {providerLabel(pr.provider)}
@@ -108,7 +108,7 @@ export function Row({
 
         <span className="flex min-w-0 flex-1 items-baseline gap-2">
           {pr.draft && (
-            <span className="shrink-0 text-[10px] font-semibold tracking-wide text-zinc-500 uppercase">
+            <span className="shrink-0 text-2xs font-semibold tracking-wide text-zinc-500 uppercase">
               draft
             </span>
           )}
@@ -154,12 +154,12 @@ export function Row({
           ))}
         </span>
 
-        <span className="w-10 shrink-0 text-right font-mono text-[11px] text-zinc-500">
+        <span className="w-11 shrink-0 text-right font-mono text-2xs text-zinc-500">
           {relativeAge(pr.updatedAt, now)}
         </span>
         {/* First thing to go when the window is narrow: the author matters least
             of the three, and the detail panel always has it. */}
-        <span className="hidden w-28 shrink-0 truncate text-right text-[11px] text-zinc-500 xl:block">
+        <span className="hidden w-28 shrink-0 truncate text-right text-2xs text-zinc-500 xl:block">
           {pr.author}
         </span>
       </Link>

@@ -11,6 +11,19 @@
     ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-mono:
     ui-monospace, "SF Mono", SFMono-Regular, Menlo, Monaco, monospace;
+
+  /*
+   * The whole scale, nudged up one step from Tailwind's defaults: 11px metadata
+   * read as too small on a high-DPI wide screen. Kept here rather than as
+   * `text-[11px]` sprinkled through the components, so the next adjustment is
+   * three numbers instead of twelve class names.
+   */
+  --text-2xs: 0.75rem; /* 12px — metadata, badges, ages */
+  --text-2xs--line-height: 1rem;
+  --text-xs: 0.8125rem; /* 13px — panel fields, banners, headers */
+  --text-xs--line-height: 1.125rem;
+  --text-sm: 0.9375rem; /* 15px — PR titles */
+  --text-sm--line-height: 1.375rem;
 }
 
 @layer base {

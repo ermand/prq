@@ -191,7 +191,7 @@ function Board() {
                   <span className="text-xs font-semibold text-zinc-200">
                     {bucket.label}
                   </span>
-                  <span className="text-[11px] text-zinc-500">
+                  <span className="text-2xs text-zinc-500">
                     {bucket.items.length}
                   </span>
                 </h2>
