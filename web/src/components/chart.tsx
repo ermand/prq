@@ -31,7 +31,7 @@ export function MonthBars({
   height?: number;
 }) {
   if (points.length === 0) {
-    return <p className="text-2xs text-zinc-600">No activity recorded.</p>;
+    return <p className="text-body text-fg-subtle">No activity recorded.</p>;
   }
   const peak = Math.max(1, ...points.map((p) => Math.max(p.a, p.b)));
   // Trailing window: 56 months of history at 4px a bar is wider than any panel,
@@ -40,13 +40,13 @@ export function MonthBars({
 
   return (
     <div>
-      <div className="flex items-center gap-3 text-2xs text-zinc-500">
+      <div className="flex items-center gap-3 text-meta text-fg-muted">
         <span className="flex items-center gap-1">
-          <span className="inline-block h-2 w-2 rounded-sm bg-zinc-600" />
+          <span className="inline-block h-2 w-2 rounded-sm bg-fg-subtle" />
           {labelA}
         </span>
         <span className="flex items-center gap-1">
-          <span className="inline-block h-2 w-2 rounded-sm bg-sky-500" />
+          <span className="inline-block h-2 w-2 rounded-sm bg-accent" />
           {labelB}
         </span>
         <span className="ml-auto font-mono">peak {peak}</span>
@@ -66,20 +66,20 @@ export function MonthBars({
           >
             <div className="absolute inset-x-0 bottom-0 flex flex-col justify-end">
               <div
-                className="w-full rounded-t-sm bg-zinc-700 group-hover:bg-zinc-500"
+                className="w-full rounded-t-sm bg-fg-subtle group-hover:bg-fg-muted"
                 style={{ height: `${(point.a / peak) * height}px` }}
               />
             </div>
             <div className="absolute inset-x-0 bottom-0 flex flex-col justify-end px-[25%]">
               <div
-                className="w-full rounded-t-sm bg-sky-500/80"
+                className="w-full rounded-t-sm bg-accent/80"
                 style={{ height: `${(point.b / peak) * height}px` }}
               />
             </div>
           </div>
         ))}
       </div>
-      <div className="mt-1 flex justify-between font-mono text-2xs text-zinc-600">
+      <div className="mt-1 flex justify-between font-mono text-meta text-fg-subtle">
         <span>{shown[0]?.month}</span>
         <span>{shown[shown.length - 1]?.month}</span>
       </div>
@@ -95,22 +95,22 @@ export function MonthBars({
 export function Meter({
   value,
   label,
-  tone = "sky",
+  tone = "accent",
 }: {
   value: number | null;
   label: string;
-  tone?: "sky" | "emerald" | "amber";
+  tone?: "accent" | "success" | "attention";
 }) {
-  const fill = { sky: "bg-sky-500", emerald: "bg-emerald-500", amber: "bg-amber-500" }[tone];
+  const fill = { accent: "bg-accent", success: "bg-success", attention: "bg-attention" }[tone];
   return (
     <div>
-      <div className="flex items-baseline justify-between text-2xs">
-        <span className="text-zinc-500">{label}</span>
-        <span className="font-mono text-zinc-300">
+      <div className="flex items-baseline justify-between text-meta">
+        <span className="text-fg-muted">{label}</span>
+        <span className="font-mono text-fg">
           {value === null ? "unknown" : `${Math.round(value * 100)}%`}
         </span>
       </div>
-      <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-zinc-800">
+      <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-surface-raised">
         {value !== null && (
           <div className={`h-full ${fill}`} style={{ width: `${value * 100}%` }} />
         )}
@@ -131,9 +131,9 @@ export function Stat({
 }) {
   return (
     <div title={hint}>
-      <div className="text-2xs tracking-wide text-zinc-500 uppercase">{label}</div>
-      <div className="mt-0.5 font-mono text-sm text-zinc-100">
-        {value === null ? <span className="text-zinc-600">unknown</span> : value}
+      <div className="text-label tracking-wide text-fg-muted uppercase">{label}</div>
+      <div className="mt-0.5 font-mono text-lead text-fg">
+        {value === null ? <span className="text-fg-subtle">unknown</span> : value}
       </div>
     </div>
   );

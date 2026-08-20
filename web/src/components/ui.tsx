@@ -13,12 +13,12 @@ import type { BucketId, Checks, MergeState, Verdict } from "../../../src/domain"
 export type Tone = "urgent" | "warn" | "good" | "bad" | "info" | "mute";
 
 const TONE: Record<Tone, string> = {
-  urgent: "bg-amber-500/15 text-amber-300 ring-amber-500/30",
-  warn: "bg-orange-500/15 text-orange-300 ring-orange-500/30",
-  good: "bg-emerald-500/15 text-emerald-300 ring-emerald-500/30",
-  bad: "bg-rose-500/15 text-rose-300 ring-rose-500/30",
-  info: "bg-sky-500/15 text-sky-300 ring-sky-500/30",
-  mute: "bg-zinc-500/10 text-zinc-400 ring-zinc-500/20",
+  urgent: "bg-attention/15 text-attention ring-attention/30",
+  warn: "bg-severe/15 text-severe ring-severe/30",
+  good: "bg-success/15 text-success ring-success/30",
+  bad: "bg-danger/15 text-danger ring-danger/30",
+  info: "bg-accent/15 text-accent ring-accent/30",
+  mute: "bg-fg-muted/10 text-fg-muted ring-fg-muted/20",
 };
 
 export function Badge({
@@ -33,7 +33,7 @@ export function Badge({
   return (
     <span
       title={title}
-      className={`inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-2xs font-medium leading-none ring-1 ring-inset ${TONE[tone]}`}
+      className={`inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 font-sans text-chip leading-none ring-1 ring-inset ${TONE[tone]}`}
     >
       {children}
     </span>
@@ -59,10 +59,10 @@ export function Pill({
   return (
     <span
       title={title}
-      className={`rounded border px-2 py-1 text-xs transition-colors ${
+      className={`rounded border px-2 py-1 font-sans text-chip transition-colors ${
         active
-          ? "border-sky-600/60 bg-sky-500/15 text-sky-200"
-          : "border-zinc-700 text-zinc-400 hover:border-zinc-500 hover:text-zinc-100"
+          ? "border-accent/60 bg-accent/15 text-accent"
+          : "border-border text-fg-muted hover:border-fg-muted hover:text-fg"
       }`}
     >
       {children}
@@ -72,13 +72,13 @@ export function Pill({
 
 /** Ordered by urgency, matching the bucket order in `domain.ts`. */
 export const BUCKET_TONE: Record<BucketId, { bar: string; dot: string }> = {
-  1: { bar: "bg-amber-400", dot: "bg-amber-400" },
-  2: { bar: "bg-orange-400", dot: "bg-orange-400" },
-  3: { bar: "bg-emerald-400", dot: "bg-emerald-400" },
-  4: { bar: "bg-rose-400", dot: "bg-rose-400" },
-  5: { bar: "bg-sky-400", dot: "bg-sky-400" },
-  6: { bar: "bg-zinc-500", dot: "bg-zinc-500" },
-  7: { bar: "bg-zinc-700", dot: "bg-zinc-700" },
+  1: { bar: "bg-attention", dot: "bg-attention" },
+  2: { bar: "bg-severe", dot: "bg-severe" },
+  3: { bar: "bg-success", dot: "bg-success" },
+  4: { bar: "bg-danger", dot: "bg-danger" },
+  5: { bar: "bg-accent", dot: "bg-accent" },
+  6: { bar: "bg-fg-muted", dot: "bg-fg-muted" },
+  7: { bar: "bg-fg-subtle", dot: "bg-fg-subtle" },
 };
 
 /** `null` means "say nothing" — the state carries no information worth pixels. */

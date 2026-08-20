@@ -56,15 +56,28 @@ export function ActiveToggle({
             ? `${what} is active. Marking it inactive ${inactiveHint}`
             : `${what} is inactive — ${inactiveHint.replace(/^stops/, "not")}. Click to resume.`
         }
-        className={`rounded border px-1.5 py-0.5 text-2xs transition-colors disabled:opacity-50 ${
+        /*
+         * The two states are deliberately unequal in weight. Rendered as a
+         * bordered pill in both, 34 identical `active` chips marched down the
+         * right edge of the projects table — a control that looks the same on
+         * every row is chrome, not information, which is the rule `ui.tsx`
+         * already states about badges.
+         *
+         * So `active` is a quiet text control that firms up on hover, and
+         * `inactive` keeps the full amber pill. The exceptional state is the loud
+         * one. It is *not* hidden until hover: the driver could not find this
+         * control when it lived only on the settings page, and a hover-only
+         * affordance would recreate exactly that.
+         */
+        className={`rounded px-1.5 py-0.5 font-sans text-chip transition-colors disabled:opacity-50 ${
           active
-            ? "border-zinc-700 text-zinc-500 hover:border-zinc-500 hover:text-zinc-200"
-            : "border-amber-600/50 bg-amber-500/10 text-amber-200 hover:border-amber-500"
+            ? "border border-transparent text-fg-muted hover:border-border hover:bg-surface hover:text-fg"
+            : "border border-attention/50 bg-attention/10 text-attention hover:border-attention"
         }`}
       >
         {busy ? "…" : active ? "active" : "inactive"}
       </button>
-      {error !== null && <span className="font-mono text-2xs text-rose-300">{error}</span>}
+      {error !== null && <span className="font-mono text-meta text-danger">{error}</span>}
     </span>
   );
 }

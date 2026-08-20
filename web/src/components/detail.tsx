@@ -44,29 +44,29 @@ export function Detail({
 
   return (
     <div className="flex h-full flex-col">
-      <div className="border-b border-zinc-800 p-4">
+      <div className="border-b border-border-muted p-4">
         {/* The panel is the safe place to reach the dashboards. The row itself
             already carries two targets that must not overlap — select, and leave
             for the forge — and a third inside it would be a nested anchor. */}
-        <div className="flex items-center gap-2 font-mono text-2xs text-zinc-500">
+        <div className="flex items-center gap-2 font-mono text-meta text-fg-muted">
           <span>{providerLabel(pr.provider)}</span>
           <Link
             to="/repos"
             search={{ r: `${pr.provider}:${pr.repo}` }}
             title="This project's history"
-            className="truncate hover:text-sky-300 hover:underline"
+            className="truncate hover:text-accent hover:underline"
           >
             {pr.repo}
           </Link>
-          <span className="text-zinc-400">#{pr.number}</span>
+          <span className="text-fg-muted">#{pr.number}</span>
         </div>
 
         {pr.url === null ? (
           // `safeUrl` rejected whatever the API returned. Saying so is better
           // than rendering a dead control.
-          <p className="mt-2 text-base leading-snug font-medium text-zinc-100">
+          <p className="mt-2 text-title leading-snug text-fg">
             {pr.title}
-            <span className="mt-1 block text-2xs font-normal text-rose-400">
+            <span className="mt-1 block text-body font-normal text-danger">
               no usable link — the API returned an address that was not https
             </span>
           </p>
@@ -75,10 +75,10 @@ export function Detail({
             href={pr.url}
             target="_blank"
             rel="noreferrer noopener"
-            className="mt-2 block text-base leading-snug font-medium text-zinc-100 hover:text-sky-300 hover:underline"
+            className="mt-2 block text-title leading-snug text-fg hover:text-accent hover:underline"
           >
             {pr.title}
-            <span className="ml-1.5 text-zinc-500">↗</span>
+            <span className="ml-1.5 text-fg-muted">↗</span>
           </a>
         )}
 
@@ -88,16 +88,16 @@ export function Detail({
         </div>
       </div>
 
-      <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 border-b border-zinc-800 p-4 text-xs">
+      <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 border-b border-border-muted p-4">
         <Field name="author">
           {pr.author === "" ? (
-            <span className="text-zinc-600">unknown</span>
+            <span className="text-fg-subtle">unknown</span>
           ) : (
             <Link
               to="/people"
               search={{ id: `${pr.provider}:${pr.author}` }}
               title="This person's profile"
-              className="hover:text-sky-300 hover:underline"
+              className="hover:text-accent hover:underline"
             >
               {pr.author}
             </Link>
@@ -108,10 +108,10 @@ export function Detail({
         <Field name="checks">{pr.checks}</Field>
         <Field name="merge">{pr.merge}</Field>
         <Field name="base">
-          <span className="font-mono">{pr.baseRef}</span>
+          <span className="font-mono text-meta">{pr.baseRef}</span>
         </Field>
         <Field name="head">
-          <span className="font-mono">{pr.headOid.slice(0, 12) || "—"}</span>
+          <span className="font-mono text-meta">{pr.headOid.slice(0, 12) || "—"}</span>
         </Field>
         <Field name="updated">{relativeAge(pr.updatedAt, now)}</Field>
         <Field name="opened">{relativeAge(pr.createdAt, now)}</Field>
@@ -122,16 +122,16 @@ export function Detail({
       </dl>
 
       {pr.staleBlock !== null && (
-        <div className="border-b border-zinc-800 p-4">
-          <h3 className="text-2xs font-semibold tracking-wide text-zinc-500 uppercase">
+        <div className="border-b border-border-muted p-4">
+          <h3 className="text-section text-fg-muted uppercase">
             My block
           </h3>
-          <p className="mt-1.5 text-xs text-zinc-300">
+          <p className="mt-1.5 text-body text-fg">
             {pr.staleBlock.value
               ? "The head has moved since I requested changes — my objection may already be addressed."
               : "The head has not moved since I requested changes."}
             {pr.staleBlock.precision === "approximate" && (
-              <span className="mt-1 block text-zinc-500">
+              <span className="mt-1 block text-fg-muted">
                 Approximate: this provider attaches no commit to a review, so it
                 compares timestamps instead.
               </span>
@@ -141,18 +141,18 @@ export function Detail({
       )}
 
       {pr.stacks.length > 0 && (
-        <div className="border-b border-zinc-800 p-4">
-          <h3 className="text-2xs font-semibold tracking-wide text-zinc-500 uppercase">
+        <div className="border-b border-border-muted p-4">
+          <h3 className="text-section text-fg-muted uppercase">
             Stacks
           </h3>
           <ul className="mt-2 space-y-1.5">
             {pr.stacks.map((stack) => (
-              <li key={stack.id} className="flex items-center gap-2 text-xs">
+              <li key={stack.id} className="flex items-center gap-2">
                 <Badge tone="info">
                   {stack.position}/{stack.size}
                   {stack.precision === "approximate" && "~"}
                 </Badge>
-                <span className="truncate font-mono text-2xs text-zinc-500">
+                <span className="truncate font-mono text-meta text-fg-muted">
                   {stack.id}
                 </span>
               </li>
@@ -162,22 +162,22 @@ export function Detail({
       )}
 
       <div className="p-4">
-        <h3 className="text-2xs font-semibold tracking-wide text-zinc-500 uppercase">
+        <h3 className="text-section text-fg-muted uppercase">
           Since the last sync
         </h3>
         {changes.length === 0 ? (
-          <p className="mt-1.5 text-xs text-zinc-500">Unchanged.</p>
+          <p className="mt-1.5 text-body text-fg-muted">Unchanged.</p>
         ) : (
           <ul className="mt-2 space-y-1.5">
             {changes.map((change) => (
-              <li key={change.kind} className="flex items-baseline gap-2 text-xs">
+              <li key={change.kind} className="flex items-baseline gap-2">
                 <Badge tone="urgent">{label(change.kind)}</Badge>
-                <span className="min-w-0 text-zinc-400">
+                <span className="min-w-0 text-meta text-fg-muted">
                   {change.from !== null && change.to !== null ? (
                     <>
-                      <span className="text-zinc-500">{short(change.from)}</span>
+                      <span className="text-fg-muted">{short(change.from)}</span>
                       {" → "}
-                      <span className="text-zinc-200">{short(change.to)}</span>
+                      <span className="text-fg">{short(change.to)}</span>
                     </>
                   ) : (
                     short(change.to ?? change.from ?? "")
@@ -195,8 +195,8 @@ export function Detail({
 function Field({ name, children }: { name: string; children: React.ReactNode }) {
   return (
     <>
-      <dt className="text-zinc-500">{name}</dt>
-      <dd className="truncate text-zinc-300">{children}</dd>
+      <dt className="text-label text-fg-muted">{name}</dt>
+      <dd className="truncate text-body text-fg">{children}</dd>
     </>
   );
 }

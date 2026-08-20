@@ -61,9 +61,11 @@ export function PersonProfile({ profile }: { profile: PersonDetailPayload }) {
   if (person === null) {
     return (
       <main className="flex min-h-0 flex-1 items-center justify-center">
-        <p className="max-w-md text-center text-xs leading-relaxed text-zinc-500">
+        {/* Still the People page, and it needs a root heading like the rest. */}
+        <h1 className="sr-only">People</h1>
+        <p className="max-w-md text-center text-body leading-relaxed text-fg-muted">
           No such person. Identities come from the census and from configured
-          aliases — <Link to="/people" search={{}} className="text-sky-400 hover:text-sky-300">back to the roster</Link>.
+          aliases — <Link to="/people" search={{}} className="text-accent hover:text-fg">back to the roster</Link>.
         </p>
       </main>
     );
@@ -77,24 +79,32 @@ export function PersonProfile({ profile }: { profile: PersonDetailPayload }) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <header className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-zinc-800 bg-zinc-900/50 px-4 py-2.5">
+      <header className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-border-muted bg-surface px-4 py-2.5">
         <Link
           to="/people"
           search={{}}
-          className="text-xs text-zinc-500 hover:text-zinc-200"
+          className="text-meta text-fg-muted hover:text-fg"
         >
           ← people
         </Link>
-        <NameEditor
-          id={person.id}
-          label={person.label}
-          textClass="text-sm font-semibold text-zinc-100"
-        />
+        {/*
+         * The person's name is what this page is about, so it is the `<h1>` —
+         * the page previously had no `<h1>` at all and opened at the section
+         * `<h2>`s. `min-w-0` keeps the editor's own truncation working now that
+         * a block element sits between it and the flex row.
+         */}
+        <h1 className="flex min-w-0">
+          <NameEditor
+            id={person.id}
+            label={person.label}
+            textClass="text-title text-fg"
+          />
+        </h1>
         {bot && <Badge tone="mute">bot</Badge>}
         {person.aliases.length > 1 && (
           <Badge tone="info">{person.aliases.length} forges</Badge>
         )}
-        <span className="ml-auto font-mono text-2xs text-zinc-500">{person.id}</span>
+        <span className="ml-auto font-mono text-meta text-fg-muted">{person.id}</span>
       </header>
 
       <main className="min-h-0 flex-1 overflow-y-auto">
@@ -167,7 +177,7 @@ function Identity({
     <Section title="identity" hint="who these numbers belong to">
       <div className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-3 lg:grid-cols-6">
         <div className="col-span-2">
-          <div className="text-2xs tracking-wide text-zinc-500 uppercase">accounts</div>
+          <div className="text-label tracking-wide text-fg-muted uppercase">accounts</div>
           <div className="mt-1 flex flex-wrap items-center gap-1.5">
             {person.aliases.map((alias) => (
               <span
@@ -175,7 +185,7 @@ function Identity({
                 className="inline-flex items-center gap-1"
               >
                 <Badge tone={merged ? "info" : "mute"} title={`${alias.provider} account`}>
-                  <span className="opacity-60">{providerLabel(alias.provider)}</span>
+                  <span className="text-fg-muted">{providerLabel(alias.provider)}</span>
                   <span className="font-mono">{alias.username}</span>
                 </Badge>
                 {/* Only offered on a person holding more than one account: the
@@ -194,7 +204,7 @@ function Identity({
                       )
                     }
                     title={`Split ${alias.username} back into its own identity`}
-                    className="text-2xs text-zinc-600 hover:text-rose-300 disabled:opacity-50"
+                    className="text-chip text-fg-subtle hover:text-danger disabled:opacity-50"
                   >
                     unlink
                   </button>
@@ -205,7 +215,7 @@ function Identity({
               type="button"
               disabled={loading || busy}
               onClick={() => (candidates === null ? void openPicker() : setCandidates(null))}
-              className="rounded border border-zinc-700 px-1.5 py-0.5 text-2xs text-zinc-400 hover:border-sky-700 hover:text-sky-300 disabled:opacity-50"
+              className="rounded border border-border px-1.5 py-0.5 text-chip text-fg-muted hover:border-accent hover:text-accent disabled:opacity-50"
             >
               {loading ? "loading…" : candidates === null ? "link an account" : "close"}
             </button>
@@ -221,8 +231,8 @@ function Identity({
         <Stat label="projects" value={person.repos.length} />
       </div>
 
-      {error !== null && <p className="mt-3 text-xs text-rose-300">{error}</p>}
-      {note !== null && <p className="mt-3 text-xs text-sky-300">{note}</p>}
+      {error !== null && <p className="mt-3 text-body text-danger">{error}</p>}
+      {note !== null && <p className="mt-3 text-body text-accent">{note}</p>}
 
       {candidates !== null && (
         <LinkPicker
@@ -239,12 +249,12 @@ function Identity({
       )}
 
       {merged && (
-        <p className="mt-3 text-xs leading-relaxed text-zinc-400">
+        <p className="mt-3 text-body leading-relaxed text-fg-muted">
           Every figure below is the sum across{" "}
           {person.aliases.map((alias, i) => (
             <span key={`${alias.provider}:${alias.username}`}>
               {i > 0 && " and "}
-              <span className="font-mono text-zinc-200">{alias.username}</span> on{" "}
+              <span className="font-mono text-fg">{alias.username}</span> on{" "}
               {alias.provider}
             </span>
           ))}
@@ -293,7 +303,7 @@ function LinkPicker({
   );
 
   return (
-    <div className="mt-3 rounded border border-zinc-800 bg-zinc-950/40 p-2">
+    <div className="mt-3 rounded border border-border-muted bg-canvas p-2">
       <div className="flex flex-wrap items-center gap-2">
         <input
           type="search"
@@ -301,9 +311,9 @@ function LinkPicker({
           placeholder="filter identities"
           aria-label="Filter identities to link"
           onChange={(e) => setNeedle(e.target.value)}
-          className="w-44 rounded border border-zinc-700 bg-zinc-900 px-2 py-0.5 text-xs text-zinc-200 placeholder:text-zinc-600 focus:border-sky-600 focus:outline-none"
+          className="w-44 rounded border border-border bg-surface px-2 py-0.5 text-chip text-fg placeholder:text-fg-subtle focus:border-accent"
         />
-        <span className="text-2xs text-zinc-500">
+        <span className="text-meta text-fg-muted">
           {ordered.length} of {candidates.length} — linking folds the one you pick into
           this person, who keeps this name and this URL.
         </span>
@@ -313,9 +323,9 @@ function LinkPicker({
         {ordered.map((candidate) => (
           <li
             key={candidate.id}
-            className="flex items-center gap-2 rounded px-1 py-1 hover:bg-zinc-900/60"
+            className="flex items-center gap-2 rounded px-1 py-1 hover:bg-surface"
           >
-            <span className="min-w-0 flex-1 truncate text-xs text-zinc-200">
+            <span className="min-w-0 flex-1 truncate text-body text-fg">
               {candidate.label}
             </span>
             {candidate.sameName && (
@@ -327,7 +337,7 @@ function LinkPicker({
             <span className="flex shrink-0 items-center gap-1">
               {candidate.accounts.map((account) => (
                 <Badge key={account} tone="mute">
-                  <span className="opacity-60">
+                  <span className="text-fg-muted">
                     {providerLabel(account.slice(0, account.indexOf(":")))}
                   </span>
                   <span className="font-mono">
@@ -340,14 +350,14 @@ function LinkPicker({
               type="button"
               disabled={busy}
               onClick={() => onPick(candidate)}
-              className="rounded bg-sky-600 px-2 py-0.5 text-2xs font-medium text-white hover:bg-sky-500 disabled:opacity-50"
+              className="rounded bg-accent-emphasis px-2 py-0.5 text-chip text-white hover:bg-accent hover:text-canvas disabled:opacity-50"
             >
               link
             </button>
           </li>
         ))}
         {ordered.length === 0 && (
-          <li className="px-1 py-1 text-2xs text-zinc-500">Nothing matches that filter.</li>
+          <li className="px-1 py-1 text-body text-fg-muted">Nothing matches that filter.</li>
         )}
       </ul>
     </div>
@@ -358,7 +368,7 @@ function Wrote({ person, bot }: { person: PersonInsight; bot: boolean }) {
   return (
     <Section title="what they wrote" hint="pull requests authored">
       {!bot && (
-        <p className="mb-3 border-l-2 border-zinc-700 bg-zinc-900/50 px-3 py-2 text-xs leading-relaxed text-zinc-400">
+        <p className="mb-3 border-l-2 border-border bg-surface px-3 py-2 text-body leading-relaxed text-fg-muted">
           These are counts of pull requests, review acts and lines — not a measure
           of contribution or performance. One pull request is one row whether it is
           a 4000-line generated migration or a one-line fix to a race condition,
@@ -386,7 +396,7 @@ function Wrote({ person, bot }: { person: PersonInsight; bot: boolean }) {
         <Meter
           value={person.mergeRate}
           label="merge rate — merged of decided"
-          tone="emerald"
+          tone="success"
         />
         <MonthBars
           points={person.activity.map((month) => ({
@@ -407,56 +417,102 @@ function Wrote({ person, bot }: { person: PersonInsight; bot: boolean }) {
 
 function Repos({ person }: { person: PersonInsight }) {
   if (person.repos.length === 0) {
-    return <p className="mt-4 text-2xs text-zinc-600">No pull requests and no reviews.</p>;
+    return <p className="mt-4 text-body text-fg-subtle">No pull requests and no reviews.</p>;
   }
 
   return (
-    <div className="mt-4">
-      <div className="flex items-center gap-3 border-b border-zinc-800 pb-1 text-2xs tracking-wide text-zinc-500 uppercase">
-        <span className="min-w-0 flex-1">project</span>
-        <span className="w-16 shrink-0 text-right">opened</span>
-        <span className="w-16 shrink-0 text-right">merged</span>
-        <span className="w-16 shrink-0 text-right">closed</span>
-        <span className="w-16 shrink-0 text-right">reviews</span>
-        <span className="w-20 shrink-0 text-right">+lines</span>
-        <span className="w-20 shrink-0 text-right">−lines</span>
+    /*
+     * Roles rather than a `<table>`: the header and the rows agree on column
+     * widths through shared flex classes, and swapping in table elements would
+     * mean re-expressing every one of them as a `<col>`. This wrapper already
+     * parents both the header row and the list, so it is the table and nothing
+     * new is introduced. No `aria-rowcount`: nothing filters this list, so the
+     * rows in the DOM are all the rows there are.
+     */
+    <div role="table" aria-label="Projects this person worked on" className="mt-4">
+      <div
+        role="row"
+        className="flex items-center gap-3 border-b border-border-muted pb-1 text-label tracking-wide text-fg-muted uppercase"
+      >
+        <span role="columnheader" className="min-w-0 flex-1">project</span>
+        <span role="columnheader" className="w-16 shrink-0 text-right">opened</span>
+        <span role="columnheader" className="w-16 shrink-0 text-right">merged</span>
+        <span role="columnheader" className="w-16 shrink-0 text-right">closed</span>
+        <span role="columnheader" className="w-16 shrink-0 text-right">reviews</span>
+        <span role="columnheader" className="w-20 shrink-0 text-right">+lines</span>
+        <span role="columnheader" className="w-20 shrink-0 text-right">−lines</span>
       </div>
-      <ul>
+      {/* `presentation` on the list and its items so the rows flatten up to the
+          table instead of arriving wrapped in list semantics. */}
+      <ul role="presentation">
         {person.repos.map((repo) => (
-          <li key={`${repo.provider}:${repo.repo}`}>
-            <Link
-              to="/repos"
-              search={{ r: `${repo.provider}:${repo.repo}` }}
-              className="flex items-center gap-3 border-b border-zinc-900 py-1.5 hover:bg-zinc-900/60"
+          <li role="presentation" key={`${repo.provider}:${repo.repo}`}>
+            {/*
+             * The link used to be the row itself. A `role="row"` on an anchor
+             * takes the link role away, and cells nested inside an anchor are no
+             * longer children of the row — so this became the stretched-overlay
+             * shape the roster and the project list already use: the row is a
+             * `div`, the link covers it, and the cells it sits under are inert.
+             */}
+            <div
+              role="row"
+              className="relative flex items-center gap-3 border-b border-border-muted py-1.5 hover:bg-surface"
             >
-              <span className="flex min-w-0 flex-1 items-center gap-1.5">
-                <span className="font-mono text-2xs text-zinc-600">
+              <span
+                role="cell"
+                className="pointer-events-none flex min-w-0 flex-1 items-center gap-1.5"
+              >
+                <Link
+                  to="/repos"
+                  search={{ r: `${repo.provider}:${repo.repo}` }}
+                  aria-label={`Open ${repo.provider}:${repo.repo}`}
+                  className="pointer-events-auto absolute inset-0"
+                />
+                <span className="font-mono text-meta text-fg-subtle">
                   {providerLabel(repo.provider)}
                 </span>
-                <span className="truncate text-xs text-zinc-200">{repo.repo}</span>
+                <span className="truncate text-title text-fg">{repo.repo}</span>
               </span>
-              <span className="w-16 shrink-0 text-right font-mono text-2xs text-zinc-200">
+              <span
+                role="cell"
+                className="pointer-events-none w-16 shrink-0 text-right font-mono text-num text-fg"
+              >
                 {num(repo.opened)}
               </span>
-              <span className="w-16 shrink-0 text-right font-mono text-2xs text-zinc-400">
+              <span
+                role="cell"
+                className="pointer-events-none w-16 shrink-0 text-right font-mono text-num text-fg-muted"
+              >
                 {num(repo.merged)}
               </span>
-              <span className="w-16 shrink-0 text-right font-mono text-2xs text-zinc-400">
+              <span
+                role="cell"
+                className="pointer-events-none w-16 shrink-0 text-right font-mono text-num text-fg-muted"
+              >
                 {num(repo.closed)}
               </span>
               {/* A project somebody only reviews in is still a project they work
                   on. Without this the roster counted three and the profile
                   listed two, for the same person. */}
-              <span className="w-16 shrink-0 text-right font-mono text-2xs text-sky-300/80">
+              <span
+                role="cell"
+                className="pointer-events-none w-16 shrink-0 text-right font-mono text-num text-accent"
+              >
                 {repo.reviews === 0 ? "—" : num(repo.reviews)}
               </span>
-              <span className="w-20 shrink-0 text-right font-mono text-2xs text-emerald-400/80">
+              <span
+                role="cell"
+                className="pointer-events-none w-20 shrink-0 text-right font-mono text-num text-success"
+              >
                 {num(repo.additions)}
               </span>
-              <span className="w-20 shrink-0 text-right font-mono text-2xs text-rose-400/80">
+              <span
+                role="cell"
+                className="pointer-events-none w-20 shrink-0 text-right font-mono text-num text-danger"
+              >
                 {num(repo.deletions)}
               </span>
-            </Link>
+            </div>
           </li>
         ))}
       </ul>
@@ -496,7 +552,7 @@ function Reviews({ person }: { person: PersonInsight }) {
       </div>
 
       {approximate && (
-        <p className="mt-3 text-xs leading-relaxed text-zinc-400">
+        <p className="mt-3 text-body leading-relaxed text-fg-muted">
           No median latency: GitLab records no review timestamps, and this person
           works on GitLab. The acts are counted, the delay before them cannot be —
           so it is left blank rather than averaged over the GitHub half and
@@ -525,11 +581,11 @@ function Acts({
   const dismissed = stat.total - stat.approved - stat.changesRequested - stat.commented;
 
   return (
-    <div className="rounded border border-zinc-800 bg-zinc-900/40 p-3">
+    <div className="rounded border border-border-muted bg-surface p-3">
       <div className="flex items-baseline gap-2">
-        <span className="text-xs font-semibold text-zinc-200">{title}</span>
-        <span className="font-mono text-sm text-zinc-100">{num(stat.total)}</span>
-        <span className="text-2xs text-zinc-500">{hint}</span>
+        <span className="text-section text-fg">{title}</span>
+        <span className="font-mono text-lead text-fg">{num(stat.total)}</span>
+        <span className="text-meta text-fg-muted">{hint}</span>
       </div>
       <div className="mt-3 grid grid-cols-3 gap-x-6">
         <Stat label="approved" value={num(stat.approved)} />
@@ -537,7 +593,7 @@ function Acts({
         <Stat label="commented" value={num(stat.commented)} />
       </div>
       {dismissed > 0 && (
-        <p className="mt-2 text-2xs text-zinc-600">
+        <p className="mt-2 text-body text-fg-subtle">
           {num(dismissed)} dismissed — counted in the total, in none of the three,
           because a dismissed approval is not an opinion any more.
         </p>
@@ -556,11 +612,17 @@ function Section({
   children: React.ReactNode;
 }) {
   return (
-    <section className="rounded border border-zinc-800 bg-zinc-900/30">
-      <h2 className="flex flex-wrap items-baseline gap-x-2 border-b border-zinc-800 px-3 py-1.5">
-        <span className="text-xs font-semibold text-zinc-200">{title}</span>
-        <span className="text-2xs text-zinc-500">{hint}</span>
-      </h2>
+    <section className="rounded border border-border-muted bg-surface">
+      {/*
+       * The hint is a sibling of the heading, not inside it. Nested, the
+       * heading's accessible name measured as `identitywho these numbers belong
+       * to` — one run-on string. The row is still the flex container, so the
+       * baseline-aligned title and hint render exactly as before.
+       */}
+      <div className="flex flex-wrap items-baseline gap-x-2 border-b border-border-muted px-3 py-1.5">
+        <h2 className="text-section text-fg">{title}</h2>
+        <span className="text-meta text-fg-muted">{hint}</span>
+      </div>
       <div className="p-3">{children}</div>
     </section>
   );

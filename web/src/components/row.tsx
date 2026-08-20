@@ -69,9 +69,9 @@ export function Row({
     <div
       className={`flex items-stretch border-l-2 transition-colors ${
         selected
-          ? "border-l-sky-400 bg-sky-500/10"
+          ? "border-l-accent bg-accent/10"
           : moved
-            ? "border-l-amber-400/70 bg-amber-500/[0.04]"
+            ? "border-l-attention/70 bg-attention/[0.04]"
             : "border-l-transparent"
       }`}
     >
@@ -79,7 +79,7 @@ export function Row({
         to="/"
         search={(prev) => ({ q: prev.q, flat: prev.flat, pr: pr.id })}
         resetScroll={false}
-        className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1 py-1.5 pl-3 hover:bg-zinc-800/60 lg:flex-nowrap"
+        className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1 py-1.5 pl-3 hover:bg-surface lg:flex-nowrap"
       >
         {/* Fixed column so the numbers line up down the list.
 
@@ -92,9 +92,9 @@ export function Row({
             exactly the part that tells `kesh-back` from `kesh-front`. */}
         <span
           title={pr.repo}
-          className="flex shrink-0 items-baseline gap-1.5 font-mono text-2xs text-zinc-500 lg:w-[14rem] xl:w-[18rem] 2xl:w-[22rem]"
+          className="flex shrink-0 items-baseline gap-1.5 font-mono text-meta text-fg-muted lg:w-[14rem] xl:w-[18rem] 2xl:w-[22rem]"
         >
-          <span className="shrink-0 text-zinc-600">
+          <span className="shrink-0 text-fg-subtle">
             {providerLabel(pr.provider)}
           </span>
           {/* `shrink` without grow: as `flex-1` the prefix stretched and left a
@@ -103,7 +103,7 @@ export function Row({
             <span className="min-w-0 shrink truncate">{repoPrefix(pr.repo)}</span>
             <span className="max-w-full shrink-0 truncate">{repoLeaf(pr.repo)}</span>
           </span>
-          <span className="shrink-0 text-zinc-400">#{pr.number}</span>
+          <span className="shrink-0 text-fg-muted">#{pr.number}</span>
         </span>
 
         {/* `shrink` without grow. As `flex-1` the title absorbed all the slack
@@ -111,12 +111,12 @@ export function Row({
             badges describing a PR sat a thousand pixels from its title. */}
         <span className="flex min-w-0 shrink items-baseline gap-2">
           {pr.draft && (
-            <span className="shrink-0 text-2xs font-semibold tracking-wide text-zinc-500 uppercase">
+            <span className="shrink-0 text-chip tracking-wide text-fg-muted uppercase">
               draft
             </span>
           )}
           <span
-            className={`truncate text-sm ${selected ? "text-white" : "text-zinc-100"}`}
+            className={`truncate text-title ${selected ? "text-white" : "text-fg"}`}
           >
             {pr.title}
           </span>
@@ -157,12 +157,12 @@ export function Row({
           ))}
         </span>
 
-        <span className="w-11 shrink-0 text-right font-mono text-2xs text-zinc-500">
+        <span className="w-11 shrink-0 text-right font-mono text-meta text-fg-muted">
           {relativeAge(pr.updatedAt, now)}
         </span>
         {/* First thing to go when the window is narrow: the author matters least
             of the three, and the detail panel always has it. */}
-        <span className="hidden w-28 shrink-0 truncate text-right text-2xs text-zinc-500 xl:block">
+        <span className="hidden w-28 shrink-0 truncate text-right text-meta text-fg-muted xl:block">
           {pr.author}
         </span>
       </Link>
@@ -186,7 +186,7 @@ function OpenOnForge({ pr }: { pr: PullRequest }) {
     return (
       <span
         title={`No usable link for ${where} — the API returned an address that was not https`}
-        className="flex w-11 shrink-0 items-center justify-center border-l border-zinc-800/80 text-zinc-700"
+        className="flex w-11 shrink-0 items-center justify-center border-l border-border-muted text-fg-subtle"
       >
         <span aria-hidden="true">✕</span>
         <span className="sr-only">No usable link</span>
@@ -201,9 +201,9 @@ function OpenOnForge({ pr }: { pr: PullRequest }) {
       rel="noreferrer noopener"
       title={`Open ${where}`}
       aria-label={`Open ${where}`}
-      className="flex w-11 shrink-0 items-center justify-center border-l border-zinc-800 text-zinc-400 transition-colors hover:bg-sky-500/20 hover:text-sky-200 focus-visible:bg-sky-500/20 focus-visible:text-sky-200"
+      className="flex w-11 shrink-0 items-center justify-center border-l border-border-muted text-fg-muted transition-colors hover:bg-accent/20 hover:text-accent focus-visible:bg-accent/20 focus-visible:text-accent"
     >
-      <span aria-hidden="true" className="text-base leading-none">
+      <span aria-hidden="true" className="text-title leading-none">
         ↗
       </span>
     </a>

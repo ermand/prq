@@ -7,23 +7,137 @@
  */
 
 @theme {
+  /*
+   * GitHub's stacks, from Primer's `--fontStack-sansSerif` and
+   * `--fontStack-monospace`.
+   *
+   * Primer leads the sans stack with `Mona Sans VF`, GitHub's own face, served
+   * from their CDN. It is deliberately omitted: prq runs on 127.0.0.1 against a
+   * local database and never reaches the network on a page load, and a webfont
+   * would break that for a typeface most readers already substitute anyway. What
+   * is left is exactly what github.com renders when Mona Sans has not loaded.
+   */
   --font-sans:
-    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial,
+    sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
   --font-mono:
-    ui-monospace, "SF Mono", SFMono-Regular, Menlo, Monaco, monospace;
+    ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono",
+    monospace;
 
   /*
-   * The whole scale, nudged up one step from Tailwind's defaults: 11px metadata
-   * read as too small on a high-DPI wide screen. Kept here rather than as
-   * `text-[11px]` sprinkled through the components, so the next adjustment is
-   * three numbers instead of twelve class names.
+   * Colour by role, from Primer's dark theme — and chosen because the old
+   * palette failed WCAG AA almost everywhere. Measured before this change, at
+   * 1440px: 166 of 294 text nodes on the board, 257 of 390 on the projects page
+   * and 215 of 293 on settings were below 4.5:1. `text-zinc-700` on `zinc-950`
+   * measured **1.91:1** and was used for 88 numbers; `text-zinc-600` measured
+   * 2.4–2.6:1 across 100-odd forge prefixes; `text-zinc-500`, which carried
+   * nearly all metadata, sat at 3.7–4.1:1 — close enough to look deliberate and
+   * still a failure.
+   *
+   * The three foreground tiers below were measured against both surfaces before
+   * being adopted: 17.4 / 6.5 / 5.1 on the canvas, 15.9 / 5.9 / 4.6 on a raised
+   * one. That is a *wider* visible hierarchy than the palette it replaces, which
+   * only looked like a hierarchy because two of its three tiers were unreadable.
+   *
+   * `fg-disabled` is 3.6:1 and is the one token allowed to fail: 1.4.3 exempts
+   * inactive controls. It must never carry content.
    */
-  --text-2xs: 0.75rem; /* 12px — metadata, badges, ages */
-  --text-2xs--line-height: 1rem;
-  --text-xs: 0.8125rem; /* 13px — panel fields, banners, headers */
-  --text-xs--line-height: 1.125rem;
-  --text-sm: 0.9375rem; /* 15px — PR titles */
-  --text-sm--line-height: 1.375rem;
+  --color-canvas: #0d1117;
+  --color-canvas-inset: #010409;
+  --color-surface: #151b23;
+  --color-surface-raised: #1c2129;
+  --color-border: #3d444d;
+  --color-border-muted: #262c36;
+
+  --color-fg: #f0f6fc;
+  --color-fg-muted: #9198a1;
+  --color-fg-subtle: #7d8590;
+  --color-fg-disabled: #656c76;
+
+  --color-accent: #4493f8;
+  --color-accent-emphasis: #1f6feb;
+  --color-success: #3fb950;
+  --color-danger: #f85149;
+  --color-attention: #d29922;
+  /**
+   * Primer's `severe`. It exists because "truncated history" is neither a
+   * warning about urgency nor an error, and folding it into `attention` would
+   * collapse two distinct meanings into one colour. Measured 6.87:1 on canvas.
+   */
+  --color-severe: #db6d28;
+  --color-done: #ab7df8;
+
+  /*
+   * Type by **role**, not by size — and every value below is GitHub's.
+   *
+   * The previous scale named sizes — `2xs`, `xs`, `sm` — and six surfaces built
+   * by different hands then picked from them independently. Measured result: 16
+   * distinct size/weight/family combinations, and a number in a table cell
+   * rendering at 12px, 13px, 15px and 36px depending on which page you were on.
+   * Naming sizes makes that inevitable; naming roles makes it impossible, because
+   * there is exactly one answer to "how big is a metric".
+   *
+   * The ramp comes from Primer's typography primitives, mapped role to token:
+   *
+   *   display → title-large   2rem     / 600
+   *   title   → title-small   1rem     / 600   (a GitHub issue title is semibold)
+   *   lead    → body-large    1rem     / 400
+   *   body    → body-medium   0.875rem / 400   (GitHub's default body size)
+   *   meta    → body-small    0.75rem  / 400
+   *
+   * Line heights are Primer's too: 1.5 `normal` above 12px, 1.625 `relaxed` at
+   * 12px. They cost density — a roomier line is the visible difference between
+   * this and a terminal — and that trade is the point of matching GitHub.
+   *
+   * Tailwind v4 turns each `--text-<role>` into a `text-<role>` utility, so the
+   * role is what you write in the markup and the ramp lives only here.
+   */
+
+  /** The big figures on a project page. Nothing else is ever this large. */
+  --text-display: 2rem;
+  --text-display--line-height: 1.5;
+  --text-display--font-weight: 500;
+
+  /** The one scannable thing in a row: a PR title, a person's name, a repo leaf. */
+  --text-title: 1rem;
+  --text-title--line-height: 1.5;
+  --text-title--font-weight: 600;
+
+  /** The leading number in a row or a stat block — a total, a median. */
+  --text-lead: 1rem;
+  --text-lead--line-height: 1.5;
+
+  /** Prose: empty states, explanations, notices, panel field values. */
+  --text-body: 0.875rem;
+  --text-body--line-height: 1.5;
+
+  /** Secondary text in a row: repo prefix, author, age, hints. */
+  --text-meta: 0.75rem;
+  --text-meta--line-height: 1.625;
+
+  /** A number in a table cell. One size, everywhere, always mono. */
+  --text-num: 0.75rem;
+  --text-num--line-height: 1.625;
+
+  /** Column headers and field labels. */
+  --text-label: 0.75rem;
+  --text-label--line-height: 1.625;
+
+  /** Badges, pills and small controls. */
+  --text-chip: 0.75rem;
+  --text-chip--line-height: 1.625;
+  --text-chip--font-weight: 500;
+
+  /** An uppercase heading over a panel section or a leaderboard. */
+  --text-section: 0.75rem;
+  --text-section--line-height: 1.625;
+  --text-section--font-weight: 600;
+  --text-section--letter-spacing: 0.04em;
+
+  /** A heading naming a group of rows — a bucket on the board. */
+  --text-group: 0.875rem;
+  --text-group--line-height: 1.5;
+  --text-group--font-weight: 600;
 }
 
 @layer base {
@@ -35,10 +149,11 @@
      * spacing and fixed column widths — so this one declaration scales the
      * whole interface with the window.
      *
-     * It exists because a ~3000px-wide display renders a 15px title at about
+     * It exists because a ~3000px-wide display renders a 16px title at about
      * the apparent size of 8px on a laptop, and the board became unreadable
      * exactly on the screens it was widened for. Fixed pixel type cannot serve
-     * both a 1400px window and a 3000px one.
+     * both a 1400px window and a 3000px one — so GitHub's ramp above is the
+     * ramp at 16px root, and it grows from there.
      *
      * 16px up to ~1600px wide, then linear to 20px at ~3000px, and capped so an
      * ultrawide does not keep inflating.
@@ -47,7 +162,7 @@
   }
 
   body {
-    @apply bg-zinc-950 text-zinc-200 font-sans antialiased;
+    @apply bg-canvas text-fg font-sans antialiased;
     /* The board is a list of many short rows; tabular figures stop the ages and
        counts from jittering as they update. */
     font-variant-numeric: tabular-nums;
@@ -55,14 +170,14 @@
 
   /* Keyboard users get the same affordances as the TUI's cursor. */
   :focus-visible {
-    @apply outline-2 outline-offset-2 outline-sky-500;
+    @apply outline-2 outline-offset-2 outline-accent;
   }
 
   ::-webkit-scrollbar {
     @apply w-2 h-2;
   }
   ::-webkit-scrollbar-thumb {
-    @apply bg-zinc-700 rounded-full;
+    @apply bg-border rounded-full;
   }
   ::-webkit-scrollbar-track {
     @apply bg-transparent;

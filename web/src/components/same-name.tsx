@@ -96,11 +96,11 @@ export function SameNameMerge({
             : `Same name — merge this into ${account.provider}:${account.username}, ` +
               `so one profile carries both accounts`
         }
-        className="rounded border border-amber-600/50 bg-amber-500/10 px-1.5 py-0.5 text-2xs text-amber-200 hover:border-amber-500 hover:bg-amber-500/20 disabled:opacity-50"
+        className="rounded border border-attention/50 bg-attention/10 px-1.5 py-0.5 text-chip text-attention hover:border-attention hover:bg-attention/20 disabled:opacity-50"
       >
         {busy ? "merging…" : "same name — merge"}
       </button>
-      {error !== null && <span className="font-mono text-2xs text-rose-300">{error}</span>}
+      {error !== null && <span className="font-mono text-meta text-danger">{error}</span>}
     </span>
   );
 }

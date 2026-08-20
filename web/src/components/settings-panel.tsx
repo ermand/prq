@@ -47,12 +47,28 @@ import { ActiveToggle } from "./active-toggle";
 import { providerLabel } from "./ui";
 
 /**
+ * The width below which a row stops shrinking and the region scrolls instead.
+ * Derived from the tracks below, not chosen: the six fixed ones sum to 28.5rem,
+ * the six `gap-x-3` gutters add 4.5rem and `px-4` adds 2rem, so the columns need
+ * 35rem before the path gets anything. Without a floor `minmax(0,1fr)` hits zero
+ * below 560px and the path — the only thing that says which project a row is
+ * about to delete — renders 0px wide; measured at 320px with 242 elements past
+ * the right edge. The extra 3.75rem is the slack the path has at 768px, the
+ * narrowest width the audit measured clean, so nothing moves at or above that.
+ *
+ * It is on the row's outer box as well as the grid because that box carries the
+ * left edge and the inactive tint, and a 320px tint under a 620px row is a row
+ * that looks like it stops halfway.
+ */
+const ROW_MIN = "min-w-[38.75rem]";
+
+/**
  * Shared by the header labels and every row so the two cannot drift. Widths in
  * `rem`, because the root font-size scales with the viewport: the columns grow
  * with the digits they hold instead of stranding them on a 3000px screen.
  */
 const COLS =
-  "grid grid-cols-[2.5rem_minmax(0,1fr)_5rem_5rem_5rem_5rem_6rem] items-center gap-x-3 px-4";
+  `grid ${ROW_MIN} grid-cols-[2.5rem_minmax(0,1fr)_5rem_5rem_5rem_5rem_6rem] items-center gap-x-3 px-4`;
 
 /**
  * Everything in the scrolling area is capped and centred rather than
@@ -66,7 +82,7 @@ const PANEL = "mx-auto w-full max-w-[64rem]";
 
 /** A zero is a fact, but it is never the fact being scanned for. */
 function Num({ value }: { value: number }) {
-  return <span className={value === 0 ? "text-zinc-700" : "text-zinc-300"}>{value}</span>;
+  return <span className={value === 0 ? "text-fg-subtle" : "text-fg"}>{value}</span>;
 }
 
 /**
@@ -80,9 +96,9 @@ function Num({ value }: { value: number }) {
  * that means it says more than a badge repeated down a third of the table.
  */
 function Age({ iso, now }: { iso: string | null; now: Date }) {
-  if (iso === null) return <span className="text-amber-300/70">never</span>;
+  if (iso === null) return <span className="text-attention">never</span>;
   return (
-    <span suppressHydrationWarning className="text-zinc-500">
+    <span suppressHydrationWarning className="text-fg-muted">
       {relativeAge(iso, now)}
     </span>
   );
@@ -192,18 +208,24 @@ export function SettingsPanel({ settings }: { settings: SettingsPayload }) {
 
   return (
     <main className="flex min-h-0 flex-1 flex-col">
-      <header className="shrink-0 border-b border-zinc-800 bg-zinc-900/50 px-4 py-2.5">
-        <span className="text-xs text-zinc-500">
+      {/*
+       * The page had no heading of any level. Its header is a counts line and
+       * the nav already marks the tab, so the root heading is `sr-only` rather
+       * than a visible second copy of the word "Settings".
+       */}
+      <h1 className="sr-only">Settings</h1>
+      <header className="shrink-0 border-b border-border-muted bg-surface px-4 py-2.5">
+        <span className="text-meta text-fg-muted">
           {settings.projects.length} tracked project
           {settings.projects.length === 1 ? "" : "s"}
           {" · "}
           {github} github, {gitlab} gitlab
           {" · "}
-          <span className="text-zinc-300">{stored}</span> stored pull requests
+          <span className="text-fg">{stored}</span> stored pull requests
           {uncensused > 0 && (
             <>
               {" · "}
-              <span className="text-amber-300/80">
+              <span className="text-attention">
                 {uncensused} never censused
               </span>
             </>
@@ -211,19 +233,27 @@ export function SettingsPanel({ settings }: { settings: SettingsPayload }) {
         </span>
       </header>
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        <p className={`${PANEL} px-4 pt-3 pb-1 text-xs text-zinc-500`}>
-          The config file holds only <code className="text-zinc-300">statePath</code> — where the
+      {/*
+       * Scrolls on both axes. The horizontal one had to be declared: with only
+       * `overflow-y-auto`, the columns past the right edge were reachable by an
+       * accident of the cascade (an unset `overflow-x` computes to `auto` next to
+       * a scrolling axis), with no scrollbar to say so and the path column
+       * collapsed to 0px meanwhile. The region owns the scroll, `COLS` owns the
+       * width it scrolls to. The prose above the table wraps as it always did.
+       */}
+      <div className="min-h-0 flex-1 overflow-auto">
+        <p className={`${PANEL} px-4 pt-3 pb-1 text-body text-fg-muted`}>
+          The config file holds only <code className="text-fg">statePath</code> — where the
           database lives. Which projects are tracked, and who the people are, is managed here in the
           database. Nothing on this page reaches a forge: it writes local rows, and filling them
-          still takes <code className="text-zinc-300">prq sync</code> or{" "}
-          <code className="text-zinc-300">prq census</code>.
+          still takes <code className="text-fg">prq sync</code> or{" "}
+          <code className="text-fg">prq census</code>.
           {settings.configPath !== "" && (
             <>
               {" "}
               This session was pointed at{" "}
               <code
-                className="text-zinc-400"
+                className="text-fg-muted"
                 title="From --state or PRQ_STATE, which overrides the config's statePath"
               >
                 {settings.configPath}
@@ -233,12 +263,12 @@ export function SettingsPanel({ settings }: { settings: SettingsPayload }) {
           )}
         </p>
 
-        {/* Amber, not red: a config that still lists projects is stale, not
+        {/* `attention`, not `danger`: a config that still lists projects is stale, not
             broken. Nothing is failing — a file is being edited to no effect. */}
         {settings.notices.map((notice) => (
           <p
             key={notice}
-            className={`${PANEL} border-b border-amber-500/20 bg-amber-500/10 px-4 py-2 text-xs text-amber-200`}
+            className={`${PANEL} border-b border-attention/20 bg-attention/10 px-4 py-2 text-body text-attention`}
           >
             {notice}
           </p>
@@ -260,85 +290,106 @@ export function SettingsPanel({ settings }: { settings: SettingsPayload }) {
             outcome is read, so the sentence cannot live in the row. */}
         {said !== null && (
           <p
-            className={`${PANEL} border-b border-zinc-800 bg-zinc-900/40 px-4 py-2 text-xs text-zinc-300`}
+            className={`${PANEL} border-b border-border-muted bg-surface px-4 py-2 text-body text-fg`}
           >
             {outcomeText(said, settings.projects)}
           </p>
         )}
 
-        <div
-          className={`${PANEL} ${COLS} sticky top-0 z-10 border-b border-zinc-800 bg-zinc-900/95 py-1.5 text-2xs tracking-wide text-zinc-500 uppercase backdrop-blur`}
-        >
-          <span />
-          <span>Project</span>
-          <span className="text-right">Stored</span>
-          <span className="text-right">Census</span>
-          <span className="text-right">Added</span>
-          <span className="text-right">Fetching</span>
-          <span className="text-right">Tracking</span>
+        {/*
+         * Roles over the grid, not a `<table>`: the header labels and every row
+         * share one `grid-template-columns` and the rows carry their own
+         * controls, so the wrapper is here only because a `role="table"` has to
+         * be the parent of its rows — the header and the `ul` were siblings of
+         * the page's prose, and prose is not allowed inside a table.
+         *
+         * Neither count is stated: nothing filters this list, so the rows in the
+         * DOM are the rows there are, and a removal confirmation opens a short
+         * row of three cells under the project it belongs to — an `aria-colcount`
+         * of 7 would only be a number for that row to contradict.
+         */}
+        <div role="table" aria-label="Tracked projects">
+          <div
+            role="row"
+            className={`${PANEL} ${COLS} sticky top-0 z-10 border-b border-border-muted bg-surface py-1.5 text-label tracking-wide text-fg-muted uppercase backdrop-blur`}
+          >
+            {/* Two letters wide, so the header is a label and not a word. */}
+            <span role="columnheader" aria-label="Forge" />
+            <span role="columnheader">Project</span>
+            <span role="columnheader" className="text-right">Stored</span>
+            <span role="columnheader" className="text-right">Census</span>
+            <span role="columnheader" className="text-right">Added</span>
+            <span role="columnheader" className="text-right">Fetching</span>
+            <span role="columnheader" className="text-right">Tracking</span>
+          </div>
+
+          {settings.projects.length > 0 && (
+            /* `presentation` down to the row: the list, its items and the tinted
+                border wrapper inside each one all flatten, which leaves the grid
+                that actually holds the cells as the row. */
+            <ul role="presentation" className={PANEL}>
+              {settings.projects.map((row) => {
+                const id = key(row.provider, row.path);
+                return (
+                  <li role="presentation" key={id}>
+                    <ProjectLine
+                      row={row}
+                      now={now}
+                      confirming={confirming === id}
+                      busy={busy === id}
+                      failed={failed !== null && failed.id === id ? failed.text : null}
+                      onAsk={() => {
+                        setConfirming(id);
+                        setFailed(null);
+                        setSaid(null);
+                      }}
+                      onCancel={() => setConfirming(null)}
+                      onRemove={() =>
+                        run(id, async () => {
+                          const { removed } = await removeProject({
+                            data: { provider: row.provider, path: row.path },
+                          });
+                          // `row.stored` is the count that was on screen when the
+                          // confirm was read, which is the number the sentence
+                          // promised to keep.
+                          return removed
+                            ? { kind: "removed", id, stored: row.stored }
+                            : { kind: "absent", id };
+                        })
+                      }
+                    />
+                  </li>
+                );
+              })}
+            </ul>
+          )}
         </div>
 
-        {settings.projects.length === 0 ? (
-          <p className="p-4 text-xs text-zinc-500">
+        {settings.projects.length === 0 && (
+          <p className="p-4 text-body text-fg-muted">
             No projects tracked. Add one above; a census is what fills it.
           </p>
-        ) : (
-          <ul className={PANEL}>
-            {settings.projects.map((row) => {
-              const id = key(row.provider, row.path);
-              return (
-                <li key={id}>
-                  <ProjectLine
-                    row={row}
-                    now={now}
-                    confirming={confirming === id}
-                    busy={busy === id}
-                    failed={failed !== null && failed.id === id ? failed.text : null}
-                    onAsk={() => {
-                      setConfirming(id);
-                      setFailed(null);
-                      setSaid(null);
-                    }}
-                    onCancel={() => setConfirming(null)}
-                    onRemove={() =>
-                      run(id, async () => {
-                        const { removed } = await removeProject({
-                          data: { provider: row.provider, path: row.path },
-                        });
-                        // `row.stored` is the count that was on screen when the
-                        // confirm was read, which is the number the sentence
-                        // promised to keep.
-                        return removed
-                          ? { kind: "removed", id, stored: row.stored }
-                          : { kind: "absent", id };
-                      })
-                    }
-                  />
-                </li>
-              );
-            })}
-          </ul>
         )}
 
         {/* Rendered only when there is something to reclaim: a purge control
             sitting at 0 rows invites a destructive click that does nothing,
             which teaches the click. */}
         {settings.orphanRows > 0 && (
-          <section className={`${PANEL} border-t border-zinc-800 px-4 py-3`}>
+          <section className={`${PANEL} border-t border-border-muted px-4 py-3`}>
             {/* `orphanRows` counts pull requests, not every row a purge takes:
                 purging 37 untracked pull requests deleted 199 rows, because the
                 reviews stored with them go too. The confirm says so rather than
                 naming a number the deletion will exceed. */}
-            <p className="text-xs text-zinc-400">
-              <span className="text-zinc-200">{settings.orphanRows}</span> stored pull request
+            <p className="text-body text-fg-muted">
+              <span className="text-fg">{settings.orphanRows}</span> stored pull request
               {settings.orphanRows === 1 ? " belongs" : "s belong"} to projects that are no longer
               tracked. They are still on disk and invisible to every page — kept so re-adding those
               projects brings their history back for free.
             </p>
 
             {purging ? (
-              <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2 rounded border border-rose-500/40 bg-rose-500/[0.06] px-3 py-2">
-                <span className="text-xs text-rose-200">
+              <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2 rounded border border-danger/40 bg-danger/[0.06] px-3 py-2">
+                <span className="text-body text-danger">
                   Deletes the {settings.orphanRows} stored pull request
                   {settings.orphanRows === 1 ? "" : "s"} and every review stored with
                   {settings.orphanRows === 1 ? " it" : " them"}, permanently. Not reversible:
@@ -355,14 +406,14 @@ export function SettingsPanel({ settings }: { settings: SettingsPayload }) {
                         return { kind: "purged", deleted };
                       })
                     }
-                    className="rounded border border-rose-500/60 bg-rose-500/20 px-2 py-1 text-2xs text-rose-100 hover:bg-rose-500/30 disabled:opacity-50"
+                    className="rounded border border-danger/60 bg-danger/20 px-2 py-1 text-chip text-danger hover:bg-danger/30 disabled:opacity-50"
                   >
                     {busy === "purge" ? "deleting…" : "delete permanently"}
                   </button>
                   <button
                     type="button"
                     onClick={() => setPurging(false)}
-                    className="rounded border border-zinc-700 px-2 py-1 text-2xs text-zinc-400 hover:border-zinc-500 hover:text-zinc-100"
+                    className="rounded border border-border px-2 py-1 text-chip text-fg-muted hover:border-fg-muted hover:text-fg"
                   >
                     keep them
                   </button>
@@ -376,14 +427,14 @@ export function SettingsPanel({ settings }: { settings: SettingsPayload }) {
                   setFailed(null);
                   setSaid(null);
                 }}
-                className="mt-2 rounded border border-zinc-700 px-2 py-1 text-2xs text-zinc-400 hover:border-rose-500/60 hover:text-rose-200"
+                className="mt-2 rounded border border-border px-2 py-1 text-chip text-fg-muted hover:border-danger/60 hover:text-danger"
               >
                 purge untracked rows…
               </button>
             )}
 
             {failed !== null && failed.id === "purge" && (
-              <p className="mt-2 font-mono text-xs text-rose-300">{failed.text}</p>
+              <p className="mt-2 font-mono text-meta text-danger">{failed.text}</p>
             )}
           </section>
         )}
@@ -415,17 +466,17 @@ function AddProject({
         e.preventDefault();
         if (path.trim() !== "") onSubmit(provider, path.trim());
       }}
-      className={`${PANEL} border-b border-zinc-800 px-4 py-3`}
+      className={`${PANEL} border-b border-border-muted px-4 py-3`}
     >
       <div className="flex flex-wrap items-center gap-2">
-        <label className="text-2xs tracking-wide text-zinc-500 uppercase" htmlFor="add-provider">
+        <label className="text-label tracking-wide text-fg-muted uppercase" htmlFor="add-provider">
           track
         </label>
         <select
           id="add-provider"
           value={provider}
           onChange={(e) => setProvider(e.target.value === "gitlab" ? "gitlab" : "github")}
-          className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs text-zinc-200 focus:border-sky-600 focus:outline-none"
+          className="rounded border border-border bg-surface px-2 py-1 text-chip text-fg focus:border-accent"
         >
           <option value="github">github</option>
           <option value="gitlab">gitlab</option>
@@ -437,13 +488,13 @@ function AddProject({
           placeholder={provider === "github" ? "owner/name" : "group/project (nested is fine)"}
           aria-label="Project path"
           spellCheck={false}
-          className="w-[26rem] max-w-full rounded border border-zinc-700 bg-zinc-900 px-2 py-1 font-mono text-xs text-zinc-200 placeholder:text-zinc-600 focus:border-sky-600 focus:outline-none"
+          className="w-[26rem] max-w-full rounded border border-border bg-surface px-2 py-1 font-mono text-chip text-fg placeholder:text-fg-subtle focus:border-accent"
         />
 
         <button
           type="submit"
           disabled={busy || path.trim() === ""}
-          className="rounded border border-sky-600/60 bg-sky-500/15 px-2.5 py-1 text-xs text-sky-200 hover:bg-sky-500/25 disabled:border-zinc-700 disabled:bg-transparent disabled:text-zinc-600"
+          className="rounded border border-accent/60 bg-accent/15 px-2.5 py-1 text-chip text-accent hover:bg-accent/25 disabled:border-border disabled:bg-transparent disabled:text-fg-subtle"
         >
           {busy ? "adding…" : "add project"}
         </button>
@@ -452,7 +503,7 @@ function AddProject({
       {/* Verbatim, beside the input that caused it: the store's message names
           the shape it wanted, which is the whole fix. */}
       {failed !== null && (
-        <p className="mt-2 font-mono text-xs text-rose-300">{failed}</p>
+        <p className="mt-2 font-mono text-meta text-danger">{failed}</p>
       )}
     </form>
   );
@@ -480,43 +531,51 @@ function ProjectLine({
   const leaf = row.path.lastIndexOf("/") + 1;
 
   return (
+    /* `presentation`, so the tint wrapper does not sit between the table and its
+       rows: what it holds is one row, plus a second row while a removal is being
+       confirmed. */
     <div
-      className={`border-l-2 ${
+      role="presentation"
+      className={`${ROW_MIN} border-l-2 ${
         confirming
-          ? "border-l-amber-400/70 bg-amber-500/[0.04]"
+          ? "border-l-attention/70 bg-attention/[0.04]"
           : row.active
             ? "border-l-transparent"
             : // Dimmed rather than hidden: it is still tracked and still counted,
               // and hiding it would make it unfindable to turn back on.
-              "border-l-amber-500/25 opacity-60"
+              "border-l-attention/40 bg-attention/[0.03]"
       }`}
     >
-      <div className={`${COLS} py-1.5 font-mono text-2xs`}>
-        <span className="text-zinc-600">{providerLabel(row.provider)}</span>
+      {/* Mono is scoped to the cells that hold a path, a count or an age. The
+          controls in this row are chips, and a chip is the same chip here as it
+          is on the roster — inheriting mono from the row made it a third thing. */}
+      <div role="row" className={`${COLS} py-1.5 text-num`}>
+        <span role="cell" className="font-mono text-fg-subtle">{providerLabel(row.provider)}</span>
 
         {/* Split on the last slash so the informative end always renders: the
             prefix absorbs the truncation, the leaf never does. */}
         <span
-          className="flex min-w-0 items-baseline"
+          role="cell"
+          className="flex min-w-0 items-baseline font-mono"
           title={`${row.provider}:${row.path}`}
         >
-          <span className="min-w-0 shrink truncate text-zinc-500">{row.path.slice(0, leaf)}</span>
-          <span className="max-w-full shrink-0 truncate text-sm text-zinc-100">
+          <span className="min-w-0 shrink truncate text-meta text-fg-muted">{row.path.slice(0, leaf)}</span>
+          <span className="max-w-full shrink-0 truncate text-title text-fg">
             {row.path.slice(leaf)}
           </span>
         </span>
 
-        <span className="text-right">
+        <span role="cell" className="text-right font-mono text-lead">
           <Num value={row.stored} />
         </span>
-        <span className="text-right">
+        <span role="cell" className="text-right font-mono">
           <Age iso={row.censusAt} now={now} />
         </span>
-        <span className="text-right">
+        <span role="cell" className="text-right font-mono">
           <Age iso={row.addedAt} now={now} />
         </span>
 
-        <span className="flex justify-end">
+        <span role="cell" className="flex justify-end">
           <ActiveToggle
             active={row.active}
             what={`${row.provider}:${row.path}`}
@@ -529,12 +588,12 @@ function ProjectLine({
           />
         </span>
 
-        <span className="text-right">
+        <span role="cell" className="text-right">
           {confirming ? (
             <button
               type="button"
               onClick={onCancel}
-              className="rounded border border-zinc-700 px-1.5 py-0.5 text-2xs text-zinc-400 hover:border-zinc-500 hover:text-zinc-100"
+              className="rounded border border-border px-1.5 py-0.5 text-chip text-fg-muted hover:border-fg-muted hover:text-fg"
             >
               cancel
             </button>
@@ -542,7 +601,7 @@ function ProjectLine({
             <button
               type="button"
               onClick={onAsk}
-              className="rounded border border-zinc-800 px-1.5 py-0.5 text-2xs text-zinc-500 hover:border-amber-500/60 hover:text-amber-200"
+              className="rounded border border-border-muted px-1.5 py-0.5 text-chip text-fg-muted hover:border-attention/60 hover:text-attention"
             >
               remove…
             </button>
@@ -553,11 +612,16 @@ function ProjectLine({
       {/* Inline rather than a modal: the row it is about stays on screen, and
           the sentence that matters is the one a modal would have buried. */}
       {confirming && (
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 pb-2">
+        /* Its own row rather than loose markup: it belongs to the project above
+           it, and a `role="table"` may hold rows and nothing else. Two cells
+           against the grid's seven — three when a removal fails — is a short row,
+           which is legal, and is why this table states no `aria-colcount` for a
+           count to disagree with. */
+        <div role="row" className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 pb-2">
           {/* A project that has never been censused has no history to keep, and
               promising that removing it "keeps its rows" would be a sentence
               about 0 rows. 13 of the 33 tracked projects are in that state. */}
-          <span className="text-xs text-amber-100/90">
+          <span role="cell" className="text-body text-attention">
             {row.stored === 0 ? (
               <>
                 Stops being scanned. It has no stored rows yet, so nothing is hidden and nothing is
@@ -573,15 +637,25 @@ function ProjectLine({
               </>
             )}
           </span>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={onRemove}
-            className="ml-auto rounded border border-amber-500/60 bg-amber-500/15 px-2 py-0.5 text-2xs text-amber-100 hover:bg-amber-500/25 disabled:opacity-50"
-          >
-            {busy ? "untracking…" : "untrack it"}
-          </button>
-          {failed !== null && <p className="w-full font-mono text-xs text-rose-300">{failed}</p>}
+          {/* The cell is a wrapper rather than the button itself: `role="cell"`
+              on the button would replace the button role, and a destructive
+              control that no longer announces as a button is worse than an extra
+              span. `ml-auto` moves with it, since the flex item is now the span. */}
+          <span role="cell" className="ml-auto">
+            <button
+              type="button"
+              disabled={busy}
+              onClick={onRemove}
+              className="rounded border border-attention/60 bg-attention/15 px-2 py-0.5 text-chip text-attention hover:bg-attention/25 disabled:opacity-50"
+            >
+              {busy ? "untracking…" : "untrack it"}
+            </button>
+          </span>
+          {failed !== null && (
+            <p role="cell" className="w-full font-mono text-meta text-danger">
+              {failed}
+            </p>
+          )}
         </div>
       )}
     </div>

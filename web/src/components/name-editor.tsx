@@ -4,9 +4,9 @@
  * The driver's roster is mostly forge logins — `kaziu`, `bbregu141`,
  * `luisalla-art`, `maksimiliano.bajo` — and none of those is a person's name.
  * Naming 29 of them by opening 29 profiles is the wrong shape, so the same
- * control has to work inline in a list row and on a heading; the only thing that
- * differs between the two is the type size, which is why that arrives as a prop
- * rather than being branched on here.
+ * control has to work inline in a list row and on a heading. A person's name is
+ * one role — `text-title` — so both callers now pass the same size and weight,
+ * and the class stays a prop only because the colour is theirs to choose.
  *
  * Three details are deliberate.
  *
@@ -48,7 +48,7 @@ export function NameEditor({
 }: {
   id: string;
   label: string;
-  /** Type size and colour, so a row and a heading can share the behaviour. */
+  /** The name's role and colour, so a row and a heading can share this. */
   textClass: string;
   /** Lets a row suspend its own click handling while an input is open. */
   onEditingChange?: (editing: boolean) => void;
@@ -123,7 +123,16 @@ export function NameEditor({
           <span className="truncate decoration-dotted underline-offset-4 group-hover/name:underline">
             {label}
           </span>
-          <span className="shrink-0 text-2xs text-zinc-600 opacity-0 transition-opacity group-hover/name:opacity-100">
+          {/*
+           * A hover-only affordance, and `opacity-0` leaves it in the
+           * accessibility tree — so on the profile, where this button is now the
+           * page's `<h1>`, the heading read as "Ermand Durro rename". The
+           * button's `title` already says what a click does.
+           */}
+          <span
+            aria-hidden="true"
+            className="shrink-0 text-chip text-fg-subtle opacity-0 transition-opacity group-hover/name:opacity-100"
+          >
             rename
           </span>
         </button>
@@ -150,13 +159,13 @@ export function NameEditor({
             close();
           }
         }}
-        className="w-44 rounded border border-sky-700 bg-zinc-900 px-2 py-0.5 text-sm text-zinc-100 placeholder:text-zinc-600 focus:border-sky-500 focus:outline-none disabled:opacity-50"
+        className="w-44 rounded border border-accent-emphasis bg-surface px-2 py-0.5 text-chip text-fg placeholder:text-fg-subtle focus:border-accent disabled:opacity-50"
       />
       <button
         type="button"
         onClick={save}
         disabled={busy}
-        className="rounded bg-sky-600 px-2 py-0.5 text-2xs font-medium text-white hover:bg-sky-500 disabled:opacity-50"
+        className="rounded bg-accent-emphasis px-2 py-0.5 text-chip text-white hover:bg-accent hover:text-canvas disabled:opacity-50"
       >
         save
       </button>
@@ -164,7 +173,7 @@ export function NameEditor({
         type="button"
         onClick={close}
         disabled={busy}
-        className="rounded border border-zinc-700 px-2 py-0.5 text-2xs text-zinc-400 hover:border-zinc-500 hover:text-zinc-100 disabled:opacity-50"
+        className="rounded border border-border px-2 py-0.5 text-chip text-fg-muted hover:border-fg-muted hover:text-fg disabled:opacity-50"
       >
         esc
       </button>
@@ -174,13 +183,13 @@ export function NameEditor({
           onClick={clear}
           disabled={busy}
           title={`Drop the stored name; the display falls back to "${fallback}".`}
-          className="rounded border border-zinc-700 px-2 py-0.5 text-2xs text-zinc-400 hover:border-rose-700 hover:text-rose-300 disabled:opacity-50"
+          className="rounded border border-border px-2 py-0.5 text-chip text-fg-muted hover:border-danger hover:text-danger disabled:opacity-50"
         >
           clear
         </button>
       )}
       {error !== null && (
-        <span className="w-full text-2xs leading-relaxed text-rose-300">{error}</span>
+        <span className="w-full font-mono text-meta leading-relaxed text-danger">{error}</span>
       )}
     </span>
   );

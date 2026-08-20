@@ -53,8 +53,11 @@ function People() {
   if (people.empty) {
     return (
       <main className="flex min-h-0 flex-1 items-center justify-center">
-        <p className="max-w-md text-center text-xs leading-relaxed text-zinc-500">
-          No census yet. Run <code className="text-zinc-300">prq census</code> first —
+        {/* The roster and the profile carry their own `<h1>`; this branch is
+            still the People page, so it needs one too. */}
+        <h1 className="sr-only">People</h1>
+        <p className="max-w-md text-center text-body leading-relaxed text-fg-muted">
+          No census yet. Run <code className="text-fg">prq census</code> first —
           contributors are derived from stored history, and the board's sync only ever
           sees pull requests that involve you.
         </p>

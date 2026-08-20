@@ -50,6 +50,20 @@ import { Badge, Pill, providerLabel } from "./ui";
 const COL = {
   n: "w-16 shrink-0 text-right",
   age: "w-14 shrink-0 text-right",
+  /**
+   * The width below which the row stops shrinking and the region scrolls
+   * instead, shared by the header and the rows for the same reason the columns
+   * are. Derived from the tracks: five fixed cells (four `w-16`, one `w-14`)
+   * take 19.5rem, the five `gap-3` gutters add 3.75rem and `px-4` adds 2rem, so
+   * the numbers need 25.25rem. The other 20rem is the identity cell, which
+   * unlike a path column cannot truncate — it is `flex-1` holding a name, a
+   * forge chip per account and two controls, none of which shrink. Measured at
+   * 320px it resolved to `clientWidth: 0` and its chips spilled over the
+   * numbers; the widest identity cell in this set measures 541px at 1440 and
+   * the median around 325px, so 20rem holds a typical row and keeps the floor
+   * under 768px, where nothing about this page changes.
+   */
+  min: "min-w-[45.25rem]",
 };
 
 /** Thousands separators without `toLocaleString`, whose grouping is a locale. */
@@ -103,20 +117,27 @@ export function PeopleList({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <header className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-zinc-800 bg-zinc-900/50 px-4 py-2.5">
-        <span className="text-xs text-zinc-500">
+      {/*
+       * The page had no heading of any level. The header spends its width on the
+       * identity count and what is hidden rather than on a title, and the nav
+       * already marks the tab — so the root heading is `sr-only` rather than a
+       * second copy of the word "People" above it.
+       */}
+      <h1 className="sr-only">People</h1>
+      <header className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-border-muted bg-surface px-4 py-2.5">
+        <span className="text-meta text-fg-muted">
           {visible.length} identit{visible.length === 1 ? "y" : "ies"}
           {filter !== "" && <> {" · "}of {people.people.length}</>}
           {hiddenInactive > 0 && (
             <>
               {" · "}
-              <span className="text-amber-300/80">{hiddenInactive} inactive hidden</span>
+              <span className="text-attention">{hiddenInactive} inactive hidden</span>
             </>
           )}
           {hiddenBots > 0 && (
             <>
               {" · "}
-              <span className="text-zinc-400">
+              <span className="text-fg-muted">
                 {hiddenBots} bot{hiddenBots === 1 ? "" : "s"} hidden
               </span>
             </>
@@ -142,7 +163,7 @@ export function PeopleList({
                 resetScroll: false,
               })
             }
-            className="w-40 rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs text-zinc-200 placeholder:text-zinc-600 focus:border-sky-600 focus:outline-none"
+            className="w-40 rounded border border-border bg-surface px-2 py-1 text-chip text-fg placeholder:text-fg-subtle focus:border-accent"
           />
 
           <Link
@@ -165,9 +186,16 @@ export function PeopleList({
         </div>
       </header>
 
-      <main className="min-h-0 flex-1 overflow-y-auto">
+      {/*
+       * Scrolls on both axes. Horizontal had to be declared: with only
+       * `overflow-y-auto` the cells past the right edge were reachable by an
+       * accident of the cascade (an unset `overflow-x` computes to `auto` beside
+       * a scrolling axis), with no scrollbar to say so, while the identity cell
+       * was crushed to 0px. The region owns the scroll, `COL.min` the width.
+       */}
+      <main className="min-h-0 flex-1 overflow-auto">
         {visible.length === 0 ? (
-          <p className="p-4 text-xs text-zinc-500">
+          <p className="p-4 text-body text-fg-muted">
             {filter === ""
               ? "No identities in the census."
               : hiddenBots > 0
@@ -181,22 +209,48 @@ export function PeopleList({
            * screen a flexible first column put "Ermand Durro" and his 815 a
            * thousand pixels apart — the same failure the board's rows document.
            * In `rem`, so the cap scales with the root font like everything else.
+           *
+           * The roles go on the elements that are already here — this capped box
+           * is the only thing that parents both the header row and the rows, so
+           * it is the table, and no wrapper is added. `<table>` was not an
+           * option: the columns are flex widths shared between the header and
+           * every row, and each row is a stretched link with an editor floating
+           * over it.
+           *
+           * `aria-rowcount` is the census total rather than what survived the
+           * filter, because three of the four controls in the header hide rows —
+           * bots, inactive, and the search box — and "4 of 31" is the fact a
+           * reader needs. Indices are 1-based over that total, header first.
            */
-          <div className="mx-auto w-full max-w-[68rem]">
-            <div className="sticky top-0 z-10 flex items-center gap-3 border-b border-zinc-800 bg-zinc-950/95 px-4 py-1.5 text-2xs tracking-wide text-zinc-500 uppercase backdrop-blur">
-              <span className="min-w-0 flex-1">person · accounts</span>
-              <span className={COL.n}>opened</span>
-              <span className={COL.n}>merged</span>
-              <span className={COL.n}>reviews</span>
-              <span className={COL.n}>projects</span>
-              <span className={COL.age}>last</span>
+          <div
+            role="table"
+            aria-label="People"
+            aria-rowcount={people.people.length + 1}
+            aria-colcount={6}
+            className="mx-auto w-full max-w-[68rem]"
+          >
+            <div
+              role="row"
+              aria-rowindex={1}
+              className={`${COL.min} sticky top-0 z-10 flex items-center gap-3 border-b border-border-muted bg-canvas px-4 py-1.5 text-label tracking-wide text-fg-muted uppercase backdrop-blur`}
+            >
+              <span role="columnheader" className="min-w-0 flex-1">person · accounts</span>
+              <span role="columnheader" className={COL.n}>opened</span>
+              <span role="columnheader" className={COL.n}>merged</span>
+              <span role="columnheader" className={COL.n}>reviews</span>
+              <span role="columnheader" className={COL.n}>projects</span>
+              <span role="columnheader" className={COL.age}>last</span>
             </div>
-            <ul>
-              {visible.map((person) => (
-                <li key={person.id}>
+            {/* `presentation` on the list and its items: the rows are the `div`
+                inside each `li`, and flattening the two elements above them is
+                cheaper than hoisting the row markup out of `PersonRowView`. */}
+            <ul role="presentation">
+              {visible.map((person, i) => (
+                <li role="presentation" key={person.id}>
                   <PersonRowView
                     person={person}
                     group={duplicates.get(person.label.trim().toLowerCase())}
+                    rowIndex={i + 2}
                   />
                 </li>
               ))}
@@ -210,10 +264,13 @@ export function PeopleList({
 function PersonRowView({
   person,
   group,
+  rowIndex,
 }: {
   person: PersonRow;
   /** The other people sharing this display name, when there are any. */
   group?: PersonRow[];
+  /** 1-based over the whole census, header included, to match `aria-rowcount`. */
+  rowIndex: number;
 }) {
   const merged = person.aliases.length > 1;
   const [editing, setEditing] = useState(false);
@@ -228,26 +285,35 @@ function PersonRowView({
    */
   return (
     <div
-      className={`group relative flex items-center gap-3 border-b border-zinc-900 px-4 py-2 hover:bg-zinc-900/60 ${
+      role="row"
+      aria-rowindex={rowIndex}
+      className={`${COL.min} group relative flex items-center gap-3 border-b border-border-muted px-4 py-2 hover:bg-surface ${
         // Dimmed, never hidden here: this row is only reachable because a filter
         // asked for it, and it has to stay legible enough to switch back on.
-        person.active ? "" : "opacity-60"
+        person.active ? "" : "border-l-2 border-l-attention/40 bg-attention/[0.03]"
       }`}
     >
-      {!editing && (
-        <Link
-          to="/people"
-          search={{ id: person.id }}
-          aria-label={`Open ${person.label}`}
-          className="absolute inset-0"
-        />
-      )}
-
-      <span className="pointer-events-none flex min-w-0 flex-1 items-center gap-2">
+      {/* The overlay moved inside the first cell when the row became a
+          `role="row"`, which may hold nothing but cells. `absolute inset-0` still
+          resolves against the row — no cell is a containing block — so the hit
+          area is unchanged, and `pointer-events-auto` lifts the link back out of
+          the inert cell it now lives in. */}
+      <span
+        role="cell"
+        className="pointer-events-none flex min-w-0 flex-1 items-center gap-2"
+      >
+        {!editing && (
+          <Link
+            to="/people"
+            search={{ id: person.id }}
+            aria-label={`Open ${person.label}`}
+            className="pointer-events-auto absolute inset-0"
+          />
+        )}
         <NameEditor
           id={person.id}
           label={person.label}
-          textClass="text-sm text-zinc-100"
+          textClass="text-title text-fg"
           onEditingChange={setEditing}
         />
         {person.bot && <Badge tone="mute">bot</Badge>}
@@ -265,7 +331,7 @@ function PersonRowView({
             tone={merged ? "info" : "mute"}
             title={`${alias.provider} account`}
           >
-            <span className="opacity-60">{providerLabel(alias.provider)}</span>
+            <span className="text-fg-muted">{providerLabel(alias.provider)}</span>
             <span className="font-mono">{alias.username}</span>
           </Badge>
         ))}
@@ -292,11 +358,11 @@ function PersonRowView({
         )}
       </span>
 
-      <span className={`${COL.n} font-mono text-2xs text-zinc-200`}>{num(person.opened)}</span>
-      <span className={`${COL.n} font-mono text-2xs text-zinc-400`}>{num(person.merged)}</span>
-      <span className={`${COL.n} font-mono text-2xs text-zinc-200`}>{num(person.reviews)}</span>
-      <span className={`${COL.n} font-mono text-2xs text-zinc-400`}>{person.repos}</span>
-      <span className={`${COL.age} font-mono text-2xs text-zinc-500`}>
+      <span role="cell" className={`${COL.n} font-mono text-num text-fg`}>{num(person.opened)}</span>
+      <span role="cell" className={`${COL.n} font-mono text-num text-fg-muted`}>{num(person.merged)}</span>
+      <span role="cell" className={`${COL.n} font-mono text-num text-fg`}>{num(person.reviews)}</span>
+      <span role="cell" className={`${COL.n} font-mono text-num text-fg-muted`}>{person.repos}</span>
+      <span role="cell" className={`${COL.age} font-mono text-num text-fg-muted`}>
         {person.lastActivity === null ? "—" : relativeAge(person.lastActivity)}
       </span>
     </div>

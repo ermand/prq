@@ -18,8 +18,8 @@ const TABS = [
 
 export function Nav() {
   return (
-    <nav className="flex shrink-0 items-center gap-4 border-b border-zinc-800 bg-zinc-950 px-4 py-1.5">
-      <span className="font-mono text-sm font-semibold text-zinc-100">prq</span>
+    <nav className="flex shrink-0 items-center gap-4 border-b border-border-muted bg-canvas px-4 py-1.5">
+      <span className="font-mono text-title text-fg">prq</span>
       <ul className="flex items-center gap-1">
         {TABS.map((tab) => (
           <li key={tab.to}>
@@ -30,12 +30,11 @@ export function Nav() {
               // stay unhighlighted, since `/` is a prefix of all of them.
               activeOptions={{ exact: tab.to === "/" }}
               activeProps={{
-                className:
-                  "rounded px-2 py-0.5 text-xs bg-zinc-800 text-zinc-100 font-medium",
+                className: "rounded px-2 py-0.5 text-chip bg-surface-raised text-fg",
               }}
               inactiveProps={{
                 className:
-                  "rounded px-2 py-0.5 text-xs text-zinc-500 hover:bg-zinc-900 hover:text-zinc-300",
+                  "rounded px-2 py-0.5 text-chip text-fg-muted hover:bg-surface hover:text-fg",
               }}
             >
               {tab.label}

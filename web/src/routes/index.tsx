@@ -121,9 +121,16 @@ function Board() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <header className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-zinc-800 bg-zinc-900/50 px-4 py-2.5">
+      {/*
+       * The page had no `<h1>` — it started at the bucket `<h2>` — and the
+       * nav already says which tab is active, so a visible title would be
+       * duplicated chrome above a header that spends its width on counts.
+       * `sr-only` gives the document a root heading without taking a pixel.
+       */}
+      <h1 className="sr-only">Board</h1>
+      <header className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-border-muted bg-surface px-4 py-2.5">
 
-        <span className="text-xs text-zinc-500">
+        <span className="text-meta text-fg-muted">
           {board.viewer === "" ? "not synced" : board.viewer}
           {" · "}
           {board.prs.length} open
@@ -147,7 +154,7 @@ function Board() {
                 resetScroll: false,
               })
             }
-            className="w-40 rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs text-zinc-200 placeholder:text-zinc-600 focus:border-sky-600 focus:outline-none"
+            className="w-40 rounded border border-border bg-surface px-2 py-1 text-chip text-fg placeholder:text-fg-subtle focus:border-accent"
           />
 
           <Link
@@ -197,7 +204,7 @@ function Board() {
             type="button"
             onClick={sync}
             disabled={syncing}
-            className="rounded bg-sky-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded bg-accent-emphasis px-2.5 py-1 text-chip text-white hover:bg-accent hover:text-canvas disabled:cursor-not-allowed disabled:opacity-50"
           >
             {syncing ? "syncing…" : "sync"}
           </button>
@@ -205,27 +212,27 @@ function Board() {
       </header>
 
       {(failures.length > 0 || syncError !== null || board.baselineReset) && (
-        <div className="shrink-0 space-y-1 border-b border-zinc-800 bg-zinc-900/30 px-4 py-2">
+        <div className="shrink-0 space-y-1 border-b border-border-muted bg-surface px-4 py-2">
           {board.baselineReset && (
-            <p className="text-xs text-sky-300">
+            <p className="text-body text-accent">
               Baseline set — the next sync is the first that can report changes.
             </p>
           )}
           {failures.map((failure) => (
-            <p key={failure} className="text-xs text-amber-300">
+            <p key={failure} className="text-body text-attention">
               Incomplete — {failure}. Previous rows are still shown.
             </p>
           ))}
           {syncError !== null && (
-            <p className="text-xs text-rose-300">Sync failed — {syncError}</p>
+            <p className="text-body text-danger">Sync failed — {syncError}</p>
           )}
         </div>
       )}
 
       {departed.length > 0 && (
-        <div className="shrink-0 border-b border-zinc-800 px-4 py-2 text-xs text-zinc-400">
+        <div className="shrink-0 border-b border-border-muted px-4 py-2 text-body text-fg-muted">
           {departed.length} merged, closed, or no longer involving you
-          <span className="text-zinc-500">
+          <span className="text-fg-muted">
             {" — "}
             {[...new Set(departed.map((c) => c.from).filter((r): r is string => r !== null))].join(", ")}
           </span>
@@ -252,17 +259,30 @@ function Board() {
           ) : (
             groupIntoBuckets(visible).map((bucket) => (
               <section key={bucket.id}>
-                <h2 className="sticky top-0 z-10 flex items-center gap-2 border-y border-zinc-800 bg-zinc-900/95 px-3 py-1.5 backdrop-blur">
+                <div className="sticky top-0 z-10 flex items-center gap-2 border-y border-border-muted bg-surface px-3 py-1.5 backdrop-blur">
                   <span
+                    aria-hidden="true"
                     className={`h-2 w-2 rounded-full ${BUCKET_TONE[bucket.id].dot}`}
                   />
-                  <span className="text-xs font-semibold text-zinc-200">
+                  {/*
+                   * The count is a sibling of the heading, not part of it. Glued
+                   * together the accessible name measured as `Awaiting me2`,
+                   * which a screen reader says as "Awaiting me two"; the
+                   * `aria-label` restates the pair with the separation a sighted
+                   * reader gets for free from the gap.
+                   */}
+                  <h2
+                    className="text-group text-fg"
+                    aria-label={`${bucket.label}, ${bucket.items.length} pull request${
+                      bucket.items.length === 1 ? "" : "s"
+                    }`}
+                  >
                     {bucket.label}
-                  </span>
-                  <span className="text-2xs text-zinc-500">
+                  </h2>
+                  <span className="font-mono text-num text-fg-muted">
                     {bucket.items.length}
                   </span>
-                </h2>
+                </div>
                 <ul>
                   {bucket.items.map((pr) => (
                     <li key={pr.id}>
@@ -280,9 +300,9 @@ function Board() {
           )}
         </main>
 
-        <aside className="hidden w-[22rem] shrink-0 overflow-y-auto border-l border-zinc-800 bg-zinc-900/30 lg:block xl:w-[26rem] 2xl:w-[30rem]">
+        <aside className="hidden w-[22rem] shrink-0 overflow-y-auto border-l border-border-muted bg-surface lg:block xl:w-[26rem] 2xl:w-[30rem]">
           {selected === null ? (
-            <p className="p-4 text-xs text-zinc-500">
+            <p className="p-4 text-body text-fg-muted">
               Select a row to see its reviewers, stack, and what changed.
             </p>
           ) : (
@@ -300,10 +320,10 @@ function Board() {
 
 function Empty({ synced, filtered }: { synced: boolean; filtered: boolean }) {
   if (filtered) {
-    return <p className="p-4 text-xs text-zinc-500">Nothing matches that filter.</p>;
+    return <p className="p-4 text-body text-fg-muted">Nothing matches that filter.</p>;
   }
   return (
-    <p className="p-4 text-xs text-zinc-500">
+    <p className="p-4 text-body text-fg-muted">
       {synced
         ? "Nothing open concerns you."
         : "Nothing stored yet — press sync to fetch the first baseline."}
