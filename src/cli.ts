@@ -22,10 +22,13 @@ import {
   viewersOf,
 } from "./engine";
 import { resolveStorePath, Store, storePath } from "./store";
+import { openTracking } from "./tracking";
 import { runApp } from "./tui";
 
 export function parseArgs(argv: string[]): {
   command: string | undefined;
+  /** Every positional, including the subcommand — `projects add x` needs them. */
+  positional: string[];
   statePath: string | undefined;
   port: number | undefined;
   open: boolean;
@@ -64,7 +67,61 @@ export function parseArgs(argv: string[]): {
     // `prq --state x sync` silently opened the dashboard instead of syncing.
     if (!arg.startsWith("-")) positional.push(arg);
   }
-  return { command: positional[0], statePath, port, open };
+  return { command: positional[0], positional, statePath, port, open };
+}
+
+/**
+ * `prq projects [list | add <provider> <path> | rm <provider> <path>]`
+ *
+ * The web UI is the comfortable way to do this; a command exists because adding
+ * a project is the first thing anybody does and booting a browser to do it is a
+ * poor first run.
+ */
+function projectsCommand(store: Store, args: string[]): void {
+  const [action, provider, path] = args;
+
+  if (action === undefined || action === "list") {
+    const rows = store.projects();
+    if (rows.length === 0) {
+      process.stdout.write("no projects tracked\n");
+      return;
+    }
+    for (const row of rows) {
+      process.stdout.write(`${row.provider}\t${row.path}\n`);
+    }
+    return;
+  }
+
+  if (provider !== "github" && provider !== "gitlab") {
+    throw new Error(`provider must be github or gitlab, not ${JSON.stringify(provider ?? "")}`);
+  }
+  if (path === undefined || path === "") {
+    throw new Error(`${action} needs a project path`);
+  }
+
+  if (action === "add") {
+    const added = store.addProject(provider, path, new Date());
+    process.stdout.write(
+      added
+        ? `added ${provider}:${path} — run \`prq sync\` and \`prq census\`\n`
+        : `${provider}:${path} was already tracked\n`,
+    );
+    return;
+  }
+
+  if (action === "rm") {
+    const removed = store.removeProject(provider, path);
+    // Says what it did *not* do, because the history surviving is the surprising
+    // half and it is what makes re-adding free.
+    process.stdout.write(
+      removed
+        ? `removed ${provider}:${path} — its stored history is kept, so adding it back needs no census\n`
+        : `${provider}:${path} was not tracked\n`,
+    );
+    return;
+  }
+
+  throw new Error(`unknown projects action ${JSON.stringify(action)} — list, add or rm`);
 }
 
 async function initConfig(): Promise<void> {
@@ -165,7 +222,7 @@ class SilentFailure extends Error {}
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
-  const { command, statePath: override, port, open } = parseArgs(args);
+  const { command, positional, statePath: override, port, open } = parseArgs(args);
 
   if (args.includes("--help") || args.includes("-h")) {
     let effective = storePath();
@@ -203,11 +260,31 @@ async function main(): Promise<void> {
   const config = await loadConfig();
   const store = await Store.open(resolveStorePath(override ?? config.statePath));
 
+  // Seeds a fresh database from the config once, then reads the store for good.
+  const tracking = openTracking(store, config, new Date());
+  for (const notice of tracking.notices) process.stderr.write(`note: ${notice}\n`);
+
+  if (
+    tracking.projects.github.length + tracking.projects.gitlab.length === 0 &&
+    command !== "projects"
+  ) {
+    // Said here rather than thrown from the parser: the fix is a command, not an
+    // edit to a file.
+    process.stderr.write(
+      "no projects tracked — add one with `prq projects add github owner/repo`\n",
+    );
+  }
+
   // Every path out of here must close the store, or the WAL sidecars outlive the
   // process still carrying a copy of the data.
   try {
+    if (command === "projects") {
+      projectsCommand(store, positional.slice(1));
+      return;
+    }
+
     if (command === "sync") {
-      const outcome = await performSync(store, config.projects);
+      const outcome = await performSync(store, tracking.projects);
       for (const failure of outcome.failures) {
         process.stderr.write(`INCOMPLETE — ${failure}\n`);
       }

@@ -13,6 +13,7 @@ const TABS = [
   { to: "/", label: "Board", hint: "open pull requests that concern you" },
   { to: "/repos", label: "Projects", hint: "every project, from stored history" },
   { to: "/people", label: "People", hint: "contribution profiles" },
+  { to: "/settings", label: "Settings", hint: "which projects prq tracks" },
 ] as const;
 
 export function Nav() {

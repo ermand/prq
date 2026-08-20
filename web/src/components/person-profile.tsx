@@ -15,13 +15,24 @@
  * the work. Stating that where it is read is cheaper than the alternative, which
  * is somebody comparing two of these side by side and believing the bigger
  * number. Bots skip it — the sentence is about people.
+ *
+ * The page also edits two things, because it is the only place with the context
+ * to do it: the name, and which forge accounts the name covers. The second one
+ * is not cosmetic — the driver's own two accounts measured 659 and 156 pull
+ * requests separately, and neither figure was the truth about him. Both edits
+ * are one row apiece and both have an undo on this page, so neither is behind a
+ * confirmation dialog.
  */
 
-import { Link } from "@tanstack/react-router";
+import { Link, useRouter } from "@tanstack/react-router";
+import { useState } from "react";
 import { isBot } from "../../../src/census";
 import type { PersonInsight } from "../../../src/insights";
 import type { PersonDetailPayload } from "../server/census";
+import type { LinkableIdentity } from "../server/settings";
+import { getLinkable, linkPerson, unlinkAccount } from "../server/settings";
 import { MonthBars, Meter, Stat } from "./chart";
+import { NameEditor } from "./name-editor";
 import { Badge, providerLabel } from "./ui";
 
 /** Thousands separators without `toLocaleString`, whose grouping is a locale. */
@@ -74,7 +85,11 @@ export function PersonProfile({ profile }: { profile: PersonDetailPayload }) {
         >
           ← people
         </Link>
-        <span className="text-sm font-semibold text-zinc-100">{person.label}</span>
+        <NameEditor
+          id={person.id}
+          label={person.label}
+          textClass="text-sm font-semibold text-zinc-100"
+        />
         {bot && <Badge tone="mute">bot</Badge>}
         {person.aliases.length > 1 && (
           <Badge tone="info">{person.aliases.length} forges</Badge>
@@ -107,6 +122,47 @@ function Identity({
   person: PersonInsight;
   spanYears: number | null;
 }) {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  /** What the last edit did to the figures, said in words rather than implied. */
+  const [note, setNote] = useState<string | null>(null);
+  /** `null` while the picker is closed, so the ~31 candidates load on demand. */
+  const [candidates, setCandidates] = useState<LinkableIdentity[] | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const merged = person.aliases.length > 1;
+
+  async function write(work: () => Promise<unknown>, said: string) {
+    setBusy(true);
+    setError(null);
+    try {
+      await work();
+      // The store is the truth: the figures on this page are recomputed by the
+      // loader, not adjusted here.
+      await router.invalidate();
+      setCandidates(null);
+      setNote(said);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function openPicker() {
+    setError(null);
+    setNote(null);
+    setLoading(true);
+    try {
+      setCandidates(await getLinkable({ data: { id: person.id } }));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setLoading(false);
+    }
+  }
+
   return (
     <Section title="identity" hint="who these numbers belong to">
       <div className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-3 lg:grid-cols-6">
@@ -114,15 +170,45 @@ function Identity({
           <div className="text-2xs tracking-wide text-zinc-500 uppercase">accounts</div>
           <div className="mt-1 flex flex-wrap items-center gap-1.5">
             {person.aliases.map((alias) => (
-              <Badge
+              <span
                 key={`${alias.provider}:${alias.username}`}
-                tone={person.aliases.length > 1 ? "info" : "mute"}
-                title={`${alias.provider} account`}
+                className="inline-flex items-center gap-1"
               >
-                <span className="opacity-60">{providerLabel(alias.provider)}</span>
-                <span className="font-mono">{alias.username}</span>
-              </Badge>
+                <Badge tone={merged ? "info" : "mute"} title={`${alias.provider} account`}>
+                  <span className="opacity-60">{providerLabel(alias.provider)}</span>
+                  <span className="font-mono">{alias.username}</span>
+                </Badge>
+                {/* Only offered on a person holding more than one account: the
+                    last account cannot be split off something it is all of. */}
+                {merged && (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() =>
+                      void write(
+                        () =>
+                          unlinkAccount({
+                            data: { provider: alias.provider, username: alias.username },
+                          }),
+                        `${alias.username} stands alone again. The figures below no longer include it.`,
+                      )
+                    }
+                    title={`Split ${alias.username} back into its own identity`}
+                    className="text-2xs text-zinc-600 hover:text-rose-300 disabled:opacity-50"
+                  >
+                    unlink
+                  </button>
+                )}
+              </span>
             ))}
+            <button
+              type="button"
+              disabled={loading || busy}
+              onClick={() => (candidates === null ? void openPicker() : setCandidates(null))}
+              className="rounded border border-zinc-700 px-1.5 py-0.5 text-2xs text-zinc-400 hover:border-sky-700 hover:text-sky-300 disabled:opacity-50"
+            >
+              {loading ? "loading…" : candidates === null ? "link an account" : "close"}
+            </button>
           </div>
         </div>
         <Stat label="first seen" value={day(person.firstSeen)} />
@@ -135,7 +221,24 @@ function Identity({
         <Stat label="projects" value={person.repos.length} />
       </div>
 
-      {person.aliases.length > 1 && (
+      {error !== null && <p className="mt-3 text-xs text-rose-300">{error}</p>}
+      {note !== null && <p className="mt-3 text-xs text-sky-300">{note}</p>}
+
+      {candidates !== null && (
+        <LinkPicker
+          candidates={candidates}
+          busy={busy}
+          onPick={(pick) =>
+            void write(
+              () => linkPerson({ data: { fromId: pick.id, intoId: person.id } }),
+              `${pick.label} folded into ${person.label}. Every figure on this page is now the sum across ` +
+                `${person.aliases.length + pick.accounts.length} accounts — unlink above to undo it.`,
+            )
+          }
+        />
+      )}
+
+      {merged && (
         <p className="mt-3 text-xs leading-relaxed text-zinc-400">
           Every figure below is the sum across{" "}
           {person.aliases.map((alias, i) => (
@@ -145,12 +248,109 @@ function Identity({
               {alias.provider}
             </span>
           ))}
-          . These are one person because the config says so; prq never merges logins
-          across forges by itself, since the same name on two forges is often two
-          people.
+          . These are one person because this database says so; prq never merges
+          logins across forges by itself, since the same name on two forges is often
+          two people. `unlink` undoes it, one account at a time.
         </p>
       )}
     </Section>
+  );
+}
+
+/**
+ * The merge picker: every other identity, filterable, because 31 of them is past
+ * the point where scanning beats typing three letters.
+ *
+ * Bots sort last rather than being hidden. `dependabot` is a legitimate merge
+ * target — two forges run their own — but offering it in the first rows of a
+ * list whose purpose is "which of these is also me" would be an invitation to
+ * mis-click, and a merge moves alias rows rather than deleting anything, so the
+ * cost of the mistake is one `unlink`.
+ */
+function LinkPicker({
+  candidates,
+  busy,
+  onPick,
+}: {
+  candidates: LinkableIdentity[];
+  busy: boolean;
+  onPick: (pick: LinkableIdentity) => void;
+}) {
+  const [needle, setNeedle] = useState("");
+
+  const n = needle.trim().toLowerCase();
+  const found = candidates.filter(
+    (c) =>
+      n === "" ||
+      c.label.toLowerCase().includes(n) ||
+      c.accounts.some((account) => account.toLowerCase().includes(n)),
+  );
+  // Same name first, then humans, then bots. The server already orders it this
+  // way; re-applied here because filtering re-sorts nothing but the eye expects
+  // the obvious candidate to stay at the top.
+  const ordered = [...found].sort(
+    (a, b) => Number(b.sameName) - Number(a.sameName) || Number(a.bot) - Number(b.bot),
+  );
+
+  return (
+    <div className="mt-3 rounded border border-zinc-800 bg-zinc-950/40 p-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          type="search"
+          value={needle}
+          placeholder="filter identities"
+          aria-label="Filter identities to link"
+          onChange={(e) => setNeedle(e.target.value)}
+          className="w-44 rounded border border-zinc-700 bg-zinc-900 px-2 py-0.5 text-xs text-zinc-200 placeholder:text-zinc-600 focus:border-sky-600 focus:outline-none"
+        />
+        <span className="text-2xs text-zinc-500">
+          {ordered.length} of {candidates.length} — linking folds the one you pick into
+          this person, who keeps this name and this URL.
+        </span>
+      </div>
+
+      <ul className="mt-2 max-h-64 space-y-0.5 overflow-y-auto">
+        {ordered.map((candidate) => (
+          <li
+            key={candidate.id}
+            className="flex items-center gap-2 rounded px-1 py-1 hover:bg-zinc-900/60"
+          >
+            <span className="min-w-0 flex-1 truncate text-xs text-zinc-200">
+              {candidate.label}
+            </span>
+            {candidate.sameName && (
+              <Badge tone="urgent" title="Identical display name — very likely the same human">
+                same name
+              </Badge>
+            )}
+            {candidate.bot && <Badge tone="mute">bot</Badge>}
+            <span className="flex shrink-0 items-center gap-1">
+              {candidate.accounts.map((account) => (
+                <Badge key={account} tone="mute">
+                  <span className="opacity-60">
+                    {providerLabel(account.slice(0, account.indexOf(":")))}
+                  </span>
+                  <span className="font-mono">
+                    {account.slice(account.indexOf(":") + 1)}
+                  </span>
+                </Badge>
+              ))}
+            </span>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => onPick(candidate)}
+              className="rounded bg-sky-600 px-2 py-0.5 text-2xs font-medium text-white hover:bg-sky-500 disabled:opacity-50"
+            >
+              link
+            </button>
+          </li>
+        ))}
+        {ordered.length === 0 && (
+          <li className="px-1 py-1 text-2xs text-zinc-500">Nothing matches that filter.</li>
+        )}
+      </ul>
+    </div>
   );
 }
 
@@ -207,7 +407,7 @@ function Wrote({ person, bot }: { person: PersonInsight; bot: boolean }) {
 
 function Repos({ person }: { person: PersonInsight }) {
   if (person.repos.length === 0) {
-    return <p className="mt-4 text-2xs text-zinc-600">No authored pull requests.</p>;
+    return <p className="mt-4 text-2xs text-zinc-600">No pull requests and no reviews.</p>;
   }
 
   return (
@@ -217,6 +417,7 @@ function Repos({ person }: { person: PersonInsight }) {
         <span className="w-16 shrink-0 text-right">opened</span>
         <span className="w-16 shrink-0 text-right">merged</span>
         <span className="w-16 shrink-0 text-right">closed</span>
+        <span className="w-16 shrink-0 text-right">reviews</span>
         <span className="w-20 shrink-0 text-right">+lines</span>
         <span className="w-20 shrink-0 text-right">−lines</span>
       </div>
@@ -242,6 +443,12 @@ function Repos({ person }: { person: PersonInsight }) {
               </span>
               <span className="w-16 shrink-0 text-right font-mono text-2xs text-zinc-400">
                 {num(repo.closed)}
+              </span>
+              {/* A project somebody only reviews in is still a project they work
+                  on. Without this the roster counted three and the profile
+                  listed two, for the same person. */}
+              <span className="w-16 shrink-0 text-right font-mono text-2xs text-sky-300/80">
+                {repo.reviews === 0 ? "—" : num(repo.reviews)}
               </span>
               <span className="w-20 shrink-0 text-right font-mono text-2xs text-emerald-400/80">
                 {num(repo.additions)}

@@ -93,6 +93,12 @@ export interface PersonInsight {
   additions: number;
   deletions: number;
   files: number;
+  /**
+   * Per project, authored **and** reviewed. A project where somebody only
+   * reviewed still belongs here: leaving it out made a reviewer's profile claim
+   * fewer projects than the roster did for the same person, and for a
+   * reviewer-only identity it hid where they work entirely.
+   */
   repos: {
     provider: Provider;
     repo: string;
@@ -101,6 +107,7 @@ export interface PersonInsight {
     closed: number;
     additions: number;
     deletions: number;
+    reviews: number;
   }[];
   reviewsGiven: ReviewerStat;
   reviewsReceived: ReviewerStat;
@@ -539,7 +546,6 @@ export function personInsight(
   const sawLast = (at: string | null) => {
     if (at !== null && (lastSeen === null || at > lastSeen)) lastSeen = at;
   };
-
   for (const pr of authored) {
     additions += pr.additions;
     deletions += pr.deletions;
@@ -556,25 +562,12 @@ export function personInsight(
       if (pr.mergedBy !== "" && isMine(pr.provider, pr.mergedBy)) selfMerged++;
     }
 
-    const key = `${pr.provider}:${pr.repo}`;
-    let repo = repos.get(key);
-    if (repo === undefined) {
-      repo = {
-        provider: pr.provider,
-        repo: pr.repo,
-        opened: 0,
-        merged: 0,
-        closed: 0,
-        additions: 0,
-        deletions: 0,
-      };
-      repos.set(key, repo);
-    }
-    repo.opened++;
-    if (pr.state === "merged") repo.merged++;
-    else if (pr.state === "closed") repo.closed++;
-    repo.additions += pr.additions;
-    repo.deletions += pr.deletions;
+    const entry = repoEntry(repos, pr.provider, pr.repo);
+    entry.opened++;
+    if (pr.state === "merged") entry.merged++;
+    else if (pr.state === "closed") entry.closed++;
+    entry.additions += pr.additions;
+    entry.deletions += pr.deletions;
   }
 
   const reviewsGiven = emptyStat();
@@ -587,6 +580,10 @@ export function personInsight(
       tallyInto(tally, monthKey(review.at), "reviews");
       sawFirst(review.at);
       sawLast(review.at);
+      // Reviewing is working on a project. Counted here so a project somebody
+      // only reviews in still appears, which is the whole profile for a
+      // reviewer-only identity.
+      repoEntry(repos, review.provider, review.repo).reviews++;
 
       // Latency is measured against the pull request the act landed on, which
       // is usually somebody else's — hence the index over every row, not just
@@ -615,6 +612,7 @@ export function personInsight(
       (a, b) =>
         b.opened - a.opened ||
         b.merged - a.merged ||
+        b.reviews - a.reviews ||
         asc(a.repo, b.repo) ||
         asc(a.provider, b.provider),
     ),
@@ -635,6 +633,31 @@ export function personInsight(
     selfMerged,
   };
 }
+
+/** One row per project, created on first sight from either direction. */
+function repoEntry(
+  repos: Map<string, PersonInsight["repos"][number]>,
+  provider: Provider,
+  repo: string,
+): PersonInsight["repos"][number] {
+  const key = `${provider}:${repo}`;
+  let entry = repos.get(key);
+  if (entry === undefined) {
+    entry = {
+      provider,
+      repo,
+      opened: 0,
+      merged: 0,
+      closed: 0,
+      additions: 0,
+      deletions: 0,
+      reviews: 0,
+    };
+    repos.set(key, entry);
+  }
+  return entry;
+}
+
 
 /**
  * State counts per project. The repo list page needs nothing else, and running

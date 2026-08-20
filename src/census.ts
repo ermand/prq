@@ -230,8 +230,21 @@ const BOTS: Record<string, true> = {
   greptile: true,
 };
 
-/** The `people:` block, after parsing. */
+/**
+ * One identity rule. Originally the `people:` config block; now also a row in
+ * the `person` table.
+ */
 export interface PersonRule {
+  /**
+   * The stored id, when there is one. Absent means derive it from the label,
+   * which is what a config-seeded rule does.
+   *
+   * Load-bearing once a name is editable: deriving the id from the label means
+   * renaming somebody changes their id, which changes their URL and orphans
+   * every row keyed to the old one. The id is the identity; the label is a
+   * display string that may change at any time.
+   */
+  id?: string;
   label: string;
   aliases: { provider: Provider; username: string }[];
 }
@@ -263,10 +276,15 @@ export function resolvePeople(
   const taken = new Set<string>();
 
   for (const rule of rules) {
-    let id = slug(rule.label);
-    // Two people can share a label — or a slug. Keep ids unique rather than
-    // silently merging two humans into one profile.
-    for (let n = 2; taken.has(id); n++) id = `${slug(rule.label)}-${n}`;
+    // A stored id is used verbatim: it is already unique, it is what the URLs
+    // point at, and it must not drift when the label is edited. Only a rule
+    // without one — a config-seeded rule — derives its id from the label.
+    let id = rule.id ?? slug(rule.label);
+    if (rule.id === undefined) {
+      // Two people can share a label — or a slug. Keep ids unique rather than
+      // silently merging two humans into one profile.
+      for (let n = 2; taken.has(id); n++) id = `${slug(rule.label)}-${n}`;
+    }
     taken.add(id);
     people.push({ id, label: rule.label, aliases: rule.aliases });
     for (const alias of rule.aliases) of.set(identityKey(alias.provider, alias.username), id);

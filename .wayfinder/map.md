@@ -266,6 +266,41 @@ both belong here rather than in a ticket:
   generated migration or a one-line fix to a race condition. Neither forge records
   the difference. The profile page states this above its own numbers.
 
+- **Config says where the database is; the database says everything else**
+  (2026-08-20). Project lists and identities moved out of `config.yaml` into the
+  store, with CRUD in `prq projects` and on a Settings page. `statePath` cannot
+  move — you need it to find the store — and nothing else needed to be in a file,
+  because projects and names are edited while the tool is running.
+  The state rules were settled by driving a throwaway reducer by hand
+  (`prototype/tracking-model` branch) rather than reasoned about, and two of them
+  would have been wrong otherwise.
+  **Seeding is recorded, not inferred.** An older config is imported once and
+  ignored after. With "import when the table is empty" instead, deleting your last
+  project resurrects the whole file on the next launch — seen immediately once it
+  was drivable.
+  **Removing a project untracks it and keeps its rows.** Every census read filters
+  on tracked projects, so a removal is visible everywhere at once, and re-adding
+  restores history with no re-census. Proven on live data: 2181 stored pull
+  requests → 1995 after removing a 186-row project → 2181 after re-adding, census
+  age preserved.
+  **A rename materialises the alias row too.** Without it, naming somebody and
+  then untracking their only project left "Kristi Aziu — no accounts": a name
+  attached to nothing. Found by driving the prototype, not by review.
+  **A person's id is never derived from their label.** `resolvePeople` used to
+  slug the label into an id; once names are editable that means renaming somebody
+  changes their URL and orphans their row. Ids are `provider:username`, or the
+  config-seeded slug, and they do not move.
+  One bug found only by driving the real UI: merging into an identity that had
+  never been named produced *two* people sharing one id, because the target's own
+  account was left unclaimed and `resolvePeople` pushed it a second time. Fixed in
+  `mergePersons`, which now anchors both sides.
+  And one feature that exists only because of observed behaviour: the driver named
+  `github:mhysollari` and `gitlab:marin.hysollari` "Marin Hysollari" eighteen
+  seconds apart. The merge already existed on the profile and was undiscoverable
+  from the roster, so two identical names now offer `same name — merge` on the row.
+  prq still never merges logins by itself: the same name on two forges is often two
+  people.
+
 ## Not yet specified
 
 - **Cursor paging, and what a project too big to scan means.** Truncation is now

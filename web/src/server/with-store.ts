@@ -12,10 +12,13 @@ import { loadConfig } from "../../../src/config";
 import type { PersonRule } from "../../../src/census";
 import type { Provider } from "../../../src/domain";
 import { resolveStorePath, Store } from "../../../src/store";
+import { openTracking } from "../../../src/tracking";
 
 export interface StoreContext {
+  /** From the store, never the config — see `tracking.ts`. */
   projects: Record<Provider, string[]>;
   people: PersonRule[];
+  notices: string[];
 }
 
 export async function withStore<T>(
@@ -28,7 +31,8 @@ export async function withStore<T>(
     resolveStorePath(process.env.PRQ_STATE ?? config.statePath),
   );
   try {
-    return await use(store, { projects: config.projects, people: config.people });
+    const tracking = openTracking(store, config, new Date());
+    return await use(store, tracking);
   } finally {
     store.close();
   }

@@ -39,9 +39,24 @@ describe("two lists", () => {
     expect(parseConfig("github: [o/a, o/b, o/a]").projects.github).toEqual(["o/a", "o/b"]);
   });
 
-  test("rejects a config with no projects at all", () => {
-    expect(() => parseConfig("statePath: x.db")).toThrow(/no projects configured/);
-    expect(() => parseConfig("github: []\ngitlab: []")).toThrow(/no projects configured/);
+  test("accepts a config with no projects at all", () => {
+    // Projects moved into the database, so a file holding only `statePath` — what
+    // `prq init` now writes — is the normal shape rather than an error.
+    expect(parseConfig("statePath: x.db").projects).toEqual({ github: [], gitlab: [] });
+    expect(parseConfig("github: []\ngitlab: []").projects).toEqual({ github: [], gitlab: [] });
+  });
+
+  test("an empty or all-comments file means defaults", () => {
+    // YAML parses both to null. `prq init` writes an all-comments file, so this
+    // path is the one a new user hits first.
+    for (const text of ["", "\n\n", "# just a comment\n"]) {
+      expect(parseConfig(text)).toEqual({ projects: { github: [], gitlab: [] }, people: [] });
+    }
+  });
+
+  test("still refuses a value that is not a mapping", () => {
+    expect(() => parseConfig("- owner/repo")).toThrow(/must be a YAML mapping/);
+    expect(() => parseConfig("just a string")).toThrow(/must be a YAML mapping/);
   });
 
   test("rejects a list that is not a list", () => {
@@ -55,10 +70,36 @@ describe("two lists", () => {
     expect(() => parseConfig("repos: [o/a]")).toThrow(/github:/);
   });
 
-  test("the shipped example parses", () => {
-    expect(parseConfig(EXAMPLE_CONFIG).projects.github).toEqual([
-      "owner/repo",
-      "owner/another-repo",
+  test("the shipped example parses, and configures nothing", () => {
+    // Everything in it is commented out now: `prq init` writes a file whose only
+    // job is to document `statePath`. Projects and people come from the database.
+    expect(parseConfig(EXAMPLE_CONFIG)).toEqual({
+      projects: { github: [], gitlab: [] },
+      people: [],
+    });
+  });
+
+  test("the shipped example's commented seed keys are valid once uncommented", () => {
+    // Sliced from the `# github:` line rather than pattern-matched, because the
+    // prose above it contains the word "people" at the start of a line and a
+    // looser rule uncommented that too.
+    const lines = EXAMPLE_CONFIG.split("\n");
+    const start = lines.findIndex((line) => line.startsWith("# github:"));
+    const uncommented = lines
+      .slice(start)
+      .map((line) => (line.startsWith("# ") ? line.slice(2) : line))
+      .join("\n");
+    const parsed = parseConfig(uncommented);
+    expect(parsed.projects.github).toEqual(["owner/repo"]);
+    expect(parsed.projects.gitlab).toEqual(["group/subgroup/project"]);
+    expect(parsed.people).toEqual([
+      {
+        label: "Ermand Durro",
+        aliases: [
+          { provider: "github", username: "ermand" },
+          { provider: "gitlab", username: "ermandduro" },
+        ],
+      },
     ]);
   });
 });
@@ -130,7 +171,10 @@ describe("loadConfig", () => {
 
   test("names the file when its contents are bad", async () => {
     const path = join(import.meta.dir, "..", "node_modules", ".prq-test-bad.yaml");
-    await Bun.write(path, "github: []");
+    // `github: []` used to be rejected for having no projects and is now valid,
+    // so this needs content that is still a real mistake: a sequence, not a
+    // mapping.
+    await Bun.write(path, "- owner/repo\n");
     await expect(loadConfig(path)).rejects.toThrow(/\.prq-test-bad\.yaml: /);
   });
 });

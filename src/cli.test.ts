@@ -314,6 +314,7 @@ describe("parseArgs", () => {
   test("finds the subcommand after a flag and its value", () => {
     expect(parseArgs(["--state", "/tmp/a.db", "sync"])).toEqual({
       command: "sync",
+      positional: ["sync"],
       statePath: "/tmp/a.db",
       port: undefined,
       open: true,
@@ -323,10 +324,25 @@ describe("parseArgs", () => {
   test("finds a flag after the subcommand too", () => {
     expect(parseArgs(["sync", "--state", "/tmp/a.db"])).toEqual({
       command: "sync",
+      positional: ["sync"],
       statePath: "/tmp/a.db",
       port: undefined,
       open: true,
     });
+  });
+
+  test("keeps every positional so a subcommand can take arguments", () => {
+    // `projects add github owner/repo` needs the tail, and flags must not land
+    // in it whatever order they arrive in.
+    expect(parseArgs(["projects", "add", "github", "owner/repo"]).positional).toEqual([
+      "projects",
+      "add",
+      "github",
+      "owner/repo",
+    ]);
+    expect(
+      parseArgs(["projects", "--state", "/tmp/a.db", "rm", "gitlab", "a/b/c"]).positional,
+    ).toEqual(["projects", "rm", "gitlab", "a/b/c"]);
   });
 
   test("reads the web port", () => {

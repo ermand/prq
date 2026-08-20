@@ -9,19 +9,35 @@
  * is a roster of automation. The count of what was hidden stays on screen, so
  * the omission is visible rather than quietly convenient.
  *
- * The accounts column is the point of the page, not decoration. `ermand` on
- * GitHub and `ermandduro` on GitLab are one person only because the config says
- * so — prq never matches logins across forges on its own — and a row whose
- * numbers are a sum of two forges has to show both accounts or the numbers are
- * unexplainable. Merged rows tint their chips for the same reason.
+ * The accounts a name stands for are the point of the page, not decoration.
+ * `ermand` on GitHub and `ermandduro` on GitLab are one person only because the
+ * database says so — prq never matches logins across forges on its own — and a
+ * row whose numbers are a sum of two forges has to show both accounts or the
+ * numbers are unexplainable. Merged rows tint their chips for the same reason.
+ *
+ * Those chips sit beside the name rather than in a column of their own, and that
+ * is arithmetic rather than taste: with a 68rem cap the fixed columns take 42rem,
+ * so a separate accounts column parked `gl kaziu` some 18rem to the right of the
+ * name it explains. Once an identity has been renamed to "Kristi Aziu", the chip
+ * is the only thing left that says which account that is.
+ *
+ * Renaming is here and not only on the profile because this is the bulk path:
+ * 28 of the 29 identities in this set are raw forge logins — `kaziu`,
+ * `bbregu141`, `luisalla-art` — and naming them by opening 28 profiles is the
+ * wrong shape. The row stays a single link: the editor sits on top of it and
+ * keeps its own clicks, so clicking a name opens a field while clicking anywhere
+ * else on the row opens the profile.
  *
  * Sorting is the server's (opened + reviews, then label). Re-sorting here would
  * put two orderings of the same list in the codebase.
  */
 
 import { Link, useNavigate } from "@tanstack/react-router";
+import { useState } from "react";
 import { relativeAge } from "../../../src/render";
 import type { PeoplePayload, PersonRow } from "../server/census";
+import { NameEditor } from "./name-editor";
+import { SameNameMerge, sameNameGroups } from "./same-name";
 import { Badge, Pill, providerLabel } from "./ui";
 
 /**
@@ -30,7 +46,6 @@ import { Badge, Pill, providerLabel } from "./ui";
  * so the label can take the remaining width on a 3000px screen.
  */
 const COL = {
-  accounts: "w-64 shrink-0",
   n: "w-16 shrink-0 text-right",
   age: "w-14 shrink-0 text-right",
 };
@@ -70,6 +85,9 @@ export function PeopleList({
   const found = people.people.filter((person) => matches(person, filter));
   const hiddenBots = bots ? 0 : found.filter((person) => person.bot).length;
   const visible = bots ? found : found.filter((person) => !person.bot);
+  // Computed over what is on screen, so a filter that hides one half of a pair
+  // does not leave a merge button pointing at a row you cannot see.
+  const duplicates = sameNameGroups(visible);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -135,8 +153,7 @@ export function PeopleList({
            */
           <div className="mx-auto w-full max-w-[68rem]">
             <div className="sticky top-0 z-10 flex items-center gap-3 border-b border-zinc-800 bg-zinc-950/95 px-4 py-1.5 text-2xs tracking-wide text-zinc-500 uppercase backdrop-blur">
-              <span className="min-w-0 flex-1">person</span>
-              <span className={COL.accounts}>accounts</span>
+              <span className="min-w-0 flex-1">person · accounts</span>
               <span className={COL.n}>opened</span>
               <span className={COL.n}>merged</span>
               <span className={COL.n}>reviews</span>
@@ -146,7 +163,10 @@ export function PeopleList({
             <ul>
               {visible.map((person) => (
                 <li key={person.id}>
-                  <PersonRowView person={person} />
+                  <PersonRowView
+                    person={person}
+                    group={duplicates.get(person.label.trim().toLowerCase())}
+                  />
                 </li>
               ))}
             </ul>
@@ -156,27 +176,52 @@ export function PeopleList({
     </div>
   );
 }
-
-function PersonRowView({ person }: { person: PersonRow }) {
+function PersonRowView({
+  person,
+  group,
+}: {
+  person: PersonRow;
+  /** The other people sharing this display name, when there are any. */
+  group?: PersonRow[];
+}) {
   const merged = person.aliases.length > 1;
+  const [editing, setEditing] = useState(false);
 
+  /*
+   * One link, stretched under the whole row, rather than a link wrapping the
+   * cells. An `<input>` inside an `<a>` is invalid and a click inside it would
+   * navigate; the editor therefore sits above this overlay on its own layer,
+   * and everything else in the row is inert text the click falls through.
+   * While a field is open the overlay is switched off, so a stray click in the
+   * row cannot navigate away from half-typed text.
+   */
   return (
-    <Link
-      to="/people"
-      search={{ id: person.id }}
-      className="flex items-center gap-3 border-b border-zinc-900 px-4 py-2 hover:bg-zinc-900/60"
-    >
-      <span className="flex min-w-0 flex-1 items-center gap-2">
-        <span className="truncate text-sm text-zinc-100">{person.label}</span>
+    <div className="group relative flex items-center gap-3 border-b border-zinc-900 px-4 py-2 hover:bg-zinc-900/60">
+      {!editing && (
+        <Link
+          to="/people"
+          search={{ id: person.id }}
+          aria-label={`Open ${person.label}`}
+          className="absolute inset-0"
+        />
+      )}
+
+      <span className="pointer-events-none flex min-w-0 flex-1 items-center gap-2">
+        <NameEditor
+          id={person.id}
+          label={person.label}
+          textClass="text-sm text-zinc-100"
+          onEditingChange={setEditing}
+        />
         {person.bot && <Badge tone="mute">bot</Badge>}
         {merged && (
-          <Badge tone="info" title="One person across two forges, merged by config">
+          <Badge tone="info" title="One person across two forges, linked in the database">
             {person.aliases.length} forges
           </Badge>
         )}
-      </span>
 
-      <span className={`${COL.accounts} flex items-center gap-1 overflow-hidden`}>
+        {/* Never hidden: after a rename the chip is the only thing on the row
+            that still says which forge account these numbers came from. */}
         {person.aliases.map((alias) => (
           <Badge
             key={`${alias.provider}:${alias.username}`}
@@ -187,6 +232,10 @@ function PersonRowView({ person }: { person: PersonRow }) {
             <span className="font-mono">{alias.username}</span>
           </Badge>
         ))}
+
+        {group !== undefined && !editing && (
+          <SameNameMerge person={person} group={group} />
+        )}
       </span>
 
       <span className={`${COL.n} font-mono text-2xs text-zinc-200`}>{num(person.opened)}</span>
@@ -196,6 +245,6 @@ function PersonRowView({ person }: { person: PersonRow }) {
       <span className={`${COL.age} font-mono text-2xs text-zinc-500`}>
         {person.lastActivity === null ? "—" : relativeAge(person.lastActivity)}
       </span>
-    </Link>
+    </div>
   );
 }

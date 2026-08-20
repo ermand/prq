@@ -5,7 +5,7 @@ import { rm } from "node:fs/promises";
 import { existsSync, statSync } from "node:fs";
 import { diff } from "./changes";
 import { normalize, type PullRequest, type RawPullRequest } from "./domain";
-import type { CensusPr, CensusReview, RepoCensus } from "./census";
+import { resolvePeople, type CensusPr, type CensusReview, type RepoCensus } from "./census";
 import { resolveStorePath, SCHEMA_VERSION, Store, storePath } from "./store";
 
 const AT = new Date("2026-06-01T00:00:00.000Z");
@@ -312,7 +312,7 @@ describe("migration", () => {
 
     const store = await Store.open(path);
     // @ts-expect-error — reading the private handle to assert the pragma.
-    expect(store.db.query("PRAGMA user_version").get().user_version).toBe(3);
+    expect(store.db.query("PRAGMA user_version").get().user_version).toBe(SCHEMA_VERSION);
     // @ts-expect-error — reading the private handle to assert the new tables.
     const tables: { name: string }[] = store.db
       .query(
@@ -335,6 +335,86 @@ describe("migration", () => {
     // And the census side is live on the migrated file.
     store.writeCensus(census(), AT);
     expect(store.censusPrs()).toHaveLength(1);
+    store.close();
+    await wipe();
+  });
+
+  test("a v3 database gains the tracking tables and keeps every row", async () => {
+    // v4 only added tables: the project list and the person rows moved out of
+    // config.yaml, and nothing already stored changed shape. A v3 file must
+    // therefore keep its baseline, its history and its census.
+    await wipe();
+    const v3 = new Database(path, { create: true });
+    v3.run("PRAGMA journal_mode = WAL");
+    v3.run(
+      "CREATE TABLE sync (id INTEGER PRIMARY KEY AUTOINCREMENT, provider TEXT NOT NULL, at TEXT NOT NULL, viewer TEXT NOT NULL, repos TEXT NOT NULL, pr_count INTEGER NOT NULL, baseline_reset INTEGER NOT NULL DEFAULT 0)",
+    );
+    v3.run(
+      "CREATE TABLE pr (id TEXT PRIMARY KEY, provider TEXT NOT NULL, synced INTEGER NOT NULL, payload TEXT NOT NULL)",
+    );
+    v3.run(
+      "CREATE TABLE change (sync_id INTEGER NOT NULL REFERENCES sync(id) ON DELETE CASCADE, pr_id TEXT NOT NULL, kind TEXT NOT NULL, from_v TEXT, to_v TEXT, PRIMARY KEY (sync_id, pr_id, kind))",
+    );
+    v3.run(
+      "CREATE TABLE census_pr (provider TEXT NOT NULL, repo TEXT NOT NULL, number INTEGER NOT NULL, state TEXT NOT NULL, draft INTEGER NOT NULL, title TEXT NOT NULL, url TEXT, author TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, merged_at TEXT, closed_at TEXT, additions INTEGER NOT NULL, deletions INTEGER NOT NULL, files INTEGER NOT NULL, merged_by TEXT NOT NULL, PRIMARY KEY (provider, repo, number))",
+    );
+    v3.run(
+      "CREATE TABLE census_review (provider TEXT NOT NULL, repo TEXT NOT NULL, number INTEGER NOT NULL, reviewer TEXT NOT NULL, act TEXT NOT NULL, at TEXT)",
+    );
+    v3.run(
+      "CREATE TABLE census_run (provider TEXT NOT NULL, repo TEXT NOT NULL, at TEXT NOT NULL, prs INTEGER NOT NULL, reviews INTEGER NOT NULL, failed TEXT, truncated INTEGER NOT NULL, PRIMARY KEY (provider, repo))",
+    );
+    v3.run(
+      "CREATE TABLE contributor (provider TEXT NOT NULL, username TEXT NOT NULL, first_seen TEXT NOT NULL, last_seen TEXT NOT NULL, prs INTEGER NOT NULL, reviews INTEGER NOT NULL, PRIMARY KEY (provider, username))",
+    );
+    const kept = pr();
+    v3.run(
+      "INSERT INTO sync (provider, at, viewer, repos, pr_count, baseline_reset) VALUES (?, ?, ?, ?, ?, 0)",
+      ["github", "2026-01-01T00:00:00Z", "ermand", '["org/repo"]', 1],
+    );
+    v3.run("INSERT INTO pr (id, provider, synced, payload) VALUES (?, ?, ?, ?)", [
+      kept.id,
+      "github",
+      1,
+      JSON.stringify(kept),
+    ]);
+    v3.run("INSERT INTO change (sync_id, pr_id, kind) VALUES (1, ?, 'joined')", [kept.id]);
+    v3.run(
+      "INSERT INTO census_pr (provider, repo, number, state, draft, title, url, author, created_at, updated_at, merged_at, closed_at, additions, deletions, files, merged_by) VALUES ('github', 'org/repo', 1, 'merged', 0, 'A change', NULL, 'alice', '2026-01-01T00:00:00.000Z', '2026-01-05T00:00:00.000Z', NULL, NULL, 1, 1, 1, '')",
+    );
+    v3.run(
+      "INSERT INTO census_review (provider, repo, number, reviewer, act, at) VALUES ('github', 'org/repo', 1, 'bob', 'approved', NULL)",
+    );
+    v3.run(
+      "INSERT INTO census_run (provider, repo, at, prs, reviews, failed, truncated) VALUES ('github', 'org/repo', '2026-01-05T00:00:00.000Z', 1, 1, NULL, 0)",
+    );
+    v3.run("PRAGMA user_version = 3");
+    v3.close();
+
+    const store = await Store.open(path);
+    // @ts-expect-error — reading the private handle to assert the pragma.
+    expect(store.db.query("PRAGMA user_version").get().user_version).toBe(4);
+    // @ts-expect-error — reading the private handle to assert the new tables.
+    const tables: { name: string }[] = store.db
+      .query(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('project', 'person', 'person_alias', 'meta') ORDER BY name",
+      )
+      .all();
+    expect(tables.map((t) => t.name)).toEqual(["meta", "person", "person_alias", "project"]);
+
+    // Nothing stored changed shape, so the baseline is still diffable.
+    const state = store.read("github");
+    expect(state.incomplete).toBe(false);
+    expect(state.prs).toHaveLength(1);
+    expect(state.changes).toEqual([{ prId: kept.id, kind: "joined", from: null, to: null }]);
+    expect(store.syncCount()).toBe(1);
+    expect(store.censusPrs()).toHaveLength(1);
+    expect(store.censusReviews()).toHaveLength(1);
+    expect(store.censusRuns()).toHaveLength(1);
+    // A v3 file was never seeded, so its config lists are still waiting to be
+    // imported once.
+    expect(store.isSeeded()).toBe(false);
+    expect(store.projects()).toEqual([]);
     store.close();
     await wipe();
   });
@@ -897,6 +977,391 @@ describe("the census", () => {
     // @ts-expect-error — reaching the private handle to simulate tampering.
     store.db.query("UPDATE census_pr SET url = 'javascript:alert(1)'").run();
     expect(store.censusPrs()[0]!.url).toBeNull();
+    store.close();
+  });
+});
+
+const LATER = new Date("2026-06-02T00:00:00.000Z");
+
+/** Census rows still on disk, tracked or not. Deliberately not through a reader. */
+const rowsOnDisk = (store: Store, table: "census_pr" | "census_review"): number =>
+  // @ts-expect-error — reaching the private handle: the point is what the file
+  // holds, not what a page would show.
+  store.db.query(`SELECT count(*) AS n FROM ${table}`).get().n;
+
+describe("tracked projects", () => {
+  test("are added, listed and removed", async () => {
+    const store = await mem();
+    expect(store.addProject("github", "org/repo", AT)).toBe(true);
+    expect(store.addProject("gitlab", "group/sub/project", LATER)).toBe(true);
+    // A duplicate is a slip, not an error: the caller is a keystroke.
+    expect(store.addProject("github", "org/repo", LATER)).toBe(false);
+    expect(store.projects()).toEqual([
+      { provider: "github", path: "org/repo", addedAt: AT.toISOString() },
+      { provider: "gitlab", path: "group/sub/project", addedAt: LATER.toISOString() },
+    ]);
+
+    expect(store.removeProject("github", "org/repo")).toBe(true);
+    expect(store.removeProject("github", "org/repo")).toBe(false);
+    expect(store.projects().map((p) => p.path)).toEqual(["group/sub/project"]);
+    store.close();
+  });
+
+  test("a path must satisfy its own provider's shape", async () => {
+    const store = await mem();
+    // GitHub paths are interpolated into a search string, where a third segment
+    // or a space injects a qualifier and silently widens the scan.
+    expect(() => store.addProject("github", "group/sub/project", AT)).toThrow(
+      /must be owner\/name/,
+    );
+    expect(() => store.addProject("github", "cli", AT)).toThrow(/rejected: "cli"/);
+    expect(() => store.addProject("github", "o/a is:private", AT)).toThrow(/owner\/name/);
+    // GitLab nests as deeply as it likes, but still rejects nonsense.
+    expect(store.addProject("gitlab", "a/b/c/d/e", AT)).toBe(true);
+    expect(() => store.addProject("gitlab", "nogroup", AT)).toThrow(/group\/project/);
+    expect(() => store.addProject("gitlab", "a//b", AT)).toThrow(/rejected: "a\/\/b"/);
+    expect(() => store.addProject("gitlab", "a/b c", AT)).toThrow(/group\/project/);
+    expect(store.projects().map((p) => p.path)).toEqual(["a/b/c/d/e"]);
+    store.close();
+  });
+
+  test("come back out in the shape a scan takes", async () => {
+    const store = await mem();
+    store.addProject("github", "org/repo", AT);
+    store.addProject("github", "org/other", AT);
+    store.addProject("gitlab", "group/project", AT);
+    expect(store.projectsByProvider()).toEqual({
+      github: ["org/other", "org/repo"],
+      gitlab: ["group/project"],
+    });
+
+    store.removeProject("gitlab", "group/project");
+    // A provider with nothing tracked is an empty list, not a missing key: the
+    // scan takes both providers every time.
+    expect(store.projectsByProvider()).toEqual({
+      github: ["org/other", "org/repo"],
+      gitlab: [],
+    });
+    store.close();
+  });
+
+  test("removing one keeps its census rows on disk", async () => {
+    // The rule: untracking hides history, it does not delete it. A mis-click
+    // would otherwise cost a full re-census, measured at 2m21s for one project.
+    const store = await mem();
+    store.addProject("github", "org/repo", AT);
+    store.writeCensus(census(), AT);
+    expect(rowsOnDisk(store, "census_pr")).toBe(1);
+
+    expect(store.removeProject("github", "org/repo")).toBe(true);
+    expect(store.projects()).toEqual([]);
+    expect(rowsOnDisk(store, "census_pr")).toBe(1);
+    expect(rowsOnDisk(store, "census_review")).toBe(1);
+
+    // Re-adding restores the history instantly, with no census in between.
+    expect(store.addProject("github", "org/repo", LATER)).toBe(true);
+    expect(store.censusPrs({ repo: "org/repo" })).toHaveLength(1);
+    store.close();
+  });
+});
+
+describe("seeding from a config file", () => {
+  const projects = { github: ["org/repo"], gitlab: ["group/project"] };
+
+  test("happens once and is recorded", async () => {
+    const store = await mem();
+    expect(store.isSeeded()).toBe(false);
+    expect(store.seedTracking(projects, [], AT)).toBe(true);
+    expect(store.isSeeded()).toBe(true);
+    expect(store.projects()).toEqual([
+      { provider: "github", path: "org/repo", addedAt: AT.toISOString() },
+      { provider: "gitlab", path: "group/project", addedAt: AT.toISOString() },
+    ]);
+    store.close();
+  });
+
+  test("does not resurrect the config after every project is deleted", async () => {
+    // The whole reason the marker is a stored fact. Keyed on "the project table
+    // is empty", deleting your last project brings the entire config file back
+    // on the next launch — which is exactly what driving the prototype showed.
+    const store = await mem();
+    expect(store.seedTracking(projects, [], AT)).toBe(true);
+    for (const project of store.projects()) {
+      store.removeProject(project.provider, project.path);
+    }
+    expect(store.projects()).toEqual([]);
+
+    expect(store.seedTracking(projects, [], LATER)).toBe(false);
+    expect(store.projects()).toEqual([]);
+    store.close();
+  });
+
+  test("gives a seeded person the id the config-derived build gave them", async () => {
+    const store = await mem();
+    store.seedTracking({ github: [], gitlab: [] }, [
+      {
+        label: "Kristi Aziu",
+        aliases: [
+          { provider: "github", username: "kaziu" },
+          { provider: "gitlab", username: "kristi" },
+        ],
+      },
+    ], AT);
+    // The id `resolvePeople` derives from the label, so no profile URL moves
+    // when the lists come out of the file.
+    expect(store.personRules()).toEqual([
+      {
+        id: "kristi-aziu",
+        label: "Kristi Aziu",
+        aliases: [
+          { provider: "github", username: "kaziu" },
+          { provider: "gitlab", username: "kristi" },
+        ],
+      },
+    ]);
+    store.close();
+  });
+
+  test("a bad seed path is refused before anything is written", async () => {
+    const store = await mem();
+    expect(() => store.seedTracking({ github: ["a/b/c"], gitlab: [] }, [], AT)).toThrow(
+      /owner\/name/,
+    );
+    expect(store.isSeeded()).toBe(false);
+    expect(store.projects()).toEqual([]);
+    store.close();
+  });
+});
+
+describe("stored people", () => {
+  test("a rename on a never-seen identity creates the person and its account", async () => {
+    // Materialising the alias row is the fix for a bug found by driving the
+    // prototype: with accounts derived from visible census rows only, renaming
+    // somebody and then untracking their only project left a name attached to
+    // nothing on the roster.
+    const store = await mem();
+    store.renamePerson("github:kaziu", "Kristi Aziu", AT);
+    expect(store.personRules()).toEqual([
+      {
+        id: "github:kaziu",
+        label: "Kristi Aziu",
+        aliases: [{ provider: "github", username: "kaziu" }],
+      },
+    ]);
+    store.close();
+  });
+
+  test("renaming twice updates in place", async () => {
+    const store = await mem();
+    store.renamePerson("github:kaziu", "Kristi Aziu", AT);
+    store.renamePerson("github:kaziu", "K. Aziu", LATER);
+    const rules = store.personRules();
+    expect(rules).toHaveLength(1);
+    expect(rules[0]!.label).toBe("K. Aziu");
+    expect(rules[0]!.aliases).toHaveLength(1);
+    store.close();
+  });
+
+  test("a blank name is refused, and a control character never reaches the roster", async () => {
+    const store = await mem();
+    expect(() => store.renamePerson("github:kaziu", "   ", AT)).toThrow(/cannot be blank/);
+    expect(store.personRules()).toEqual([]);
+    store.renamePerson("github:kaziu", " Kristi\u001b[2J ", AT);
+    expect(store.personRules()[0]!.label).toBe("Kristi [2J");
+    store.close();
+  });
+
+  test("a slug id claims no account by itself", async () => {
+    // A config-seeded person's id is a slug, which names nobody on any forge.
+    const store = await mem();
+    store.renamePerson("kristi-aziu", "Kristi Aziu", AT);
+    expect(store.personRules()).toEqual([
+      { id: "kristi-aziu", label: "Kristi Aziu", aliases: [] },
+    ]);
+    store.close();
+  });
+
+  test("round-trip ids so resolvePeople keeps them", async () => {
+    const store = await mem();
+    store.renamePerson("github:kaziu", "Kristi Aziu", AT);
+    const { people, of } = resolvePeople(
+      [
+        { provider: "github", username: "kaziu" },
+        { provider: "github", username: "alice" },
+      ],
+      store.personRules(),
+    );
+    // The stored id is used verbatim: derived from the label it would change on
+    // every rename and orphan every URL pointing at the person.
+    expect(of.get("github:kaziu")).toBe("github:kaziu");
+    expect(people.find((p) => p.id === "github:kaziu")?.label).toBe("Kristi Aziu");
+    // Anyone unnamed still stands alone under their own login.
+    expect(people.find((p) => p.id === "github:alice")?.label).toBe("alice");
+    store.close();
+  });
+
+  test("a merge moves the accounts and deletes the source person", async () => {
+    const store = await mem();
+    store.renamePerson("github:kaziu", "Kristi Aziu", AT);
+    store.renamePerson("gitlab:kristi", "Kristi A", AT);
+    expect(store.mergePersons("gitlab:kristi", "github:kaziu", LATER)).toBe(true);
+
+    // The target keeps its own id and label; both accounts now hang off it.
+    expect(store.personRules()).toEqual([
+      {
+        id: "github:kaziu",
+        label: "Kristi Aziu",
+        aliases: [
+          { provider: "github", username: "kaziu" },
+          { provider: "gitlab", username: "kristi" },
+        ],
+      },
+    ]);
+    store.close();
+  });
+
+  test("a merge works on identities nobody has ever named", async () => {
+    // Neither side has a row yet, so the alias the move rewrites has to be
+    // created first — the common case, since the roster offers census-derived
+    // identities.
+    //
+    // Both accounts are anchored, not just the moved one. This assertion used to
+    // expect only `gitlab:kristi`, which encoded a bug: with the target's own
+    // account left unclaimed, `resolvePeople` pushed it a second time and the
+    // roster showed one human twice with the counts split between the halves.
+    const store = await mem();
+    expect(store.mergePersons("gitlab:kristi", "github:kaziu", AT)).toBe(true);
+    expect(store.personRules()).toEqual([
+      {
+        id: "github:kaziu",
+        // No label was ever typed, so the target falls back to its own login.
+        label: "kaziu",
+        aliases: [
+          { provider: "github", username: "kaziu" },
+          { provider: "gitlab", username: "kristi" },
+        ],
+      },
+    ]);
+    store.close();
+  });
+
+  test("a merge refuses the same person, and anything it cannot move", async () => {
+    const store = await mem();
+    expect(store.mergePersons("github:kaziu", "github:kaziu", AT)).toBe(false);
+    // Not an identity id, and no stored row: there is no person here to fold.
+    expect(store.mergePersons("kristi-aziu", "github:kaziu", AT)).toBe(false);
+    expect(store.personRules()).toEqual([]);
+    store.close();
+  });
+
+  test("a split un-claims one account and leaves the name standing", async () => {
+    const store = await mem();
+    store.renamePerson("github:kaziu", "Kristi Aziu", AT);
+    store.mergePersons("gitlab:kristi", "github:kaziu", AT);
+
+    expect(store.splitAlias("gitlab", "kristi")).toBe(true);
+    expect(store.splitAlias("gitlab", "kristi")).toBe(false);
+    expect(store.personRules()).toEqual([
+      {
+        id: "github:kaziu",
+        label: "Kristi Aziu",
+        aliases: [{ provider: "github", username: "kaziu" }],
+      },
+    ]);
+
+    // Splitting the last account keeps the person: a name with nothing under it
+    // is still a name somebody typed, and dropping it would make it vanish.
+    expect(store.splitAlias("github", "kaziu")).toBe(true);
+    expect(store.personRules()).toEqual([
+      { id: "github:kaziu", label: "Kristi Aziu", aliases: [] },
+    ]);
+    store.close();
+  });
+
+  test("a username is not a project path", async () => {
+    const store = await mem();
+    expect(() => store.splitAlias("github", "org/repo")).toThrow(/no separator/);
+    expect(() => store.splitAlias("github", "two words")).toThrow(/no whitespace/);
+    store.close();
+  });
+});
+
+describe("purging untracked history", () => {
+  test("deletes only the untracked rows and returns the count", async () => {
+    const store = await mem();
+    store.addProject("github", "org/repo", AT);
+    store.addProject("github", "org/other", AT);
+    store.writeCensus(census({ prs: [censusPr(), censusPr({ number: 2 })] }), AT);
+    store.writeCensus(
+      census({
+        repo: "org/other",
+        prs: [censusPr({ repo: "org/other", number: 7, author: "carol" })],
+        reviews: [censusReview({ repo: "org/other", number: 7, reviewer: "alice" })],
+      }),
+      AT,
+    );
+    expect(rowsOnDisk(store, "census_pr")).toBe(3);
+
+    // Nothing is untracked yet, so a purge is a no-op.
+    expect(store.purgeUntracked()).toBe(0);
+    expect(rowsOnDisk(store, "census_pr")).toBe(3);
+
+    store.removeProject("github", "org/other");
+    // One pull request and one review belonged to the untracked project.
+    expect(store.purgeUntracked()).toBe(2);
+    expect(store.censusPrs().map((p) => p.repo)).toEqual(["org/repo", "org/repo"]);
+    expect(rowsOnDisk(store, "census_pr")).toBe(2);
+    expect(store.censusRuns().map((r) => r.repo)).toEqual(["org/repo"]);
+    // `contributor` is derived, so it must not keep counting rows that are gone.
+    expect(store.contributors().map((c) => c.username)).toEqual(["alice", "bob"]);
+    expect(store.purgeUntracked()).toBe(0);
+    store.close();
+  });
+
+  test("takes the run record of an untracked project that never yielded rows", async () => {
+    // A failed census records the attempt and no history. Left behind, the
+    // projects page would keep showing a last-scanned time for a project nobody
+    // tracks any more.
+    const store = await mem();
+    store.addProject("github", "org/repo", AT);
+    store.writeCensus(census({ prs: [], reviews: [], failed: "token expired" }), AT);
+    expect(store.censusRuns()).toHaveLength(1);
+
+    store.removeProject("github", "org/repo");
+    expect(store.purgeUntracked()).toBe(0);
+    expect(store.censusRuns()).toEqual([]);
+    store.close();
+  });
+});
+
+describe("merging into an identity that was never named", () => {
+  test("yields one person, not two sharing an id", async () => {
+    // Found by driving the UI: `resolvePeople` saw a rule holding only the moved
+    // alias, then the target's own contributor key fell through unclaimed and was
+    // pushed a second time — one human listed twice with the counts split.
+    const store = await mem();
+    const at = new Date("2026-08-20T12:00:00.000Z");
+
+    expect(store.mergePersons("gitlab:marin.hysollari", "github:mhysollari", at)).toBe(true);
+
+    const rules = store.personRules();
+    expect(rules).toHaveLength(1);
+    expect(rules[0]?.id).toBe("github:mhysollari");
+    expect(rules[0]?.aliases.map((a) => `${a.provider}:${a.username}`).sort()).toEqual([
+      "github:mhysollari",
+      "gitlab:marin.hysollari",
+    ]);
+
+    // And the identities really resolve onto one person, which is the property
+    // the roster depends on.
+    const { people } = resolvePeople(
+      [
+        { provider: "github", username: "mhysollari" },
+        { provider: "gitlab", username: "marin.hysollari" },
+      ],
+      rules,
+    );
+    expect(people).toHaveLength(1);
     store.close();
   });
 });

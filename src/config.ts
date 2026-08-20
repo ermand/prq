@@ -26,12 +26,17 @@ import type { Provider } from "./domain";
 export const APP_NAME = "prq";
 
 export interface Config {
-  /** Project paths per provider. A provider absent from the config has none. */
+  /**
+   * Project paths per provider. **Seed values only.** They are imported into the
+   * database on its first run and ignored ever after — the store is the source
+   * of truth, because these are edited while the tool is running. See
+   * `tracking.ts`.
+   */
   projects: Record<Provider, string[]>;
   /**
-   * Identity rules, in config order. Empty when the block is absent: every
-   * unclaimed login then becomes its own person downstream, so omitting it
-   * costs merging, not coverage.
+   * Identity rules, in config order. **Seed values only**, as above. Empty when
+   * the block is absent: every unclaimed login then becomes its own person, so
+   * omitting it costs merging, not coverage.
    */
   people: PersonRule[];
   /**
@@ -47,29 +52,34 @@ export function configPath(env: NodeJS.ProcessEnv = process.env): string {
   return join(base, APP_NAME, "config.yaml");
 }
 
-export const EXAMPLE_CONFIG = `# ${APP_NAME} — projects to scan, per provider
-github:
-  - owner/repo
-  - owner/another-repo
+export const EXAMPLE_CONFIG = `# ${APP_NAME} — where the state database lives.
+#
+# That is all this file is for now. Projects and people used to be listed here
+# and are stored in the database instead, because they are things you edit while
+# the tool is running: \`${APP_NAME} projects add owner/repo\`, or the Settings
+# page in \`${APP_NAME} web\`. \`statePath\` cannot move there — you need it to
+# find the database.
+#
+# Omit it for the XDG default (~/.local/state/${APP_NAME}/state.db). A relative
+# path resolves against the directory you run ${APP_NAME} from, which is a trap
+# for a command on your PATH: it would create an empty database wherever you
+# happen to be. Use an absolute path unless the store is meant to live beside
+# one project. It holds private project names and PR titles, so keep it out of
+# version control.
+# statePath: ${"$"}HOME/.local/state/${APP_NAME}/state.db
 
-# GitLab paths may nest as deeply as their groups do.
+# The keys below are read **once**, to seed a fresh database, and ignored after
+# that. They exist so an older config still works. Once seeded, edit projects and
+# people with the CLI or the web UI — changing them here does nothing.
+#
+# github:
+#   - owner/repo
 # gitlab:
 #   - group/subgroup/project
-
-# One human, two forges. The driver is ermand on GitHub and ermandduro on
-# GitLab, and a profile that counts them as two contributors is wrong. Each
-# entry needs a label and at least one forge username. Omit the block and every
-# login stands alone.
 # people:
 #   - label: Ermand Durro
 #     github: ermand
 #     gitlab: ermandduro
-
-# Where to keep the state database. Omit for the XDG default
-# (~/.local/state/${APP_NAME}/state.db). A relative path resolves against the
-# directory you run ${APP_NAME} from. It holds private project names and PR
-# titles, so keep it out of version control.
-# statePath: .prq/state.db
 `;
 
 /**
@@ -231,8 +241,13 @@ function readPeople(doc: Record<string, unknown>): PersonRule[] {
  */
 export function parseConfig(text: string): Config {
   const doc: unknown = parse(text);
-  if (doc === null || typeof doc !== "object" || Array.isArray(doc)) {
-    throw new Error("config must be a YAML mapping with a `github:` or `gitlab:` key");
+  // An empty file, or one that is nothing but comments, parses to `null`. That is
+  // now the normal shape — `prq init` writes exactly that — so it means "all
+  // defaults", not "malformed". Anything that is a non-mapping value, though, is
+  // a real mistake worth refusing.
+  if (doc === null || doc === undefined) return { projects: { github: [], gitlab: [] }, people: [] };
+  if (typeof doc !== "object" || Array.isArray(doc)) {
+    throw new Error("config must be a YAML mapping");
   }
   const mapping = doc as Record<string, unknown>;
 
@@ -250,9 +265,10 @@ export function parseConfig(text: string): Config {
     gitlab: readList(mapping, "gitlab"),
   };
 
-  if (projects.github.length === 0 && projects.gitlab.length === 0) {
-    throw new Error("no projects configured — add at least one under `github:` or `gitlab:`");
-  }
+  // No longer an error. Projects live in the database, so a config carrying only
+  // `statePath` — the file `prq init` now writes — is the normal shape. An empty
+  // *database* is what the pages report, and they can say so far better than a
+  // parser refusing to start.
 
   const { statePath } = mapping;
   if (statePath !== undefined && (typeof statePath !== "string" || statePath.trim() === "")) {

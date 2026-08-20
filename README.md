@@ -8,19 +8,19 @@ able to tell you what changed since you last looked.
 
 ```bash
 bun install
-bun src/cli.ts init      # writes an example config
+bun src/cli.ts init                                  # writes a config
+bun src/cli.ts projects add github owner/repo
+bun src/cli.ts projects add gitlab group/subgroup/project
+bun src/cli.ts projects list
 ```
 
-Then edit `~/.config/prq/config.yaml`:
+**Projects live in the database, not the config file.** They are the thing you
+edit while the tool is running, so they are managed with `prq projects` or on the
+Settings page in `prq web`, and adding one takes effect immediately.
+
+`~/.config/prq/config.yaml` is now only this:
 
 ```yaml
-github:
-  - owner/repo
-  - owner/another-repo
-
-gitlab:
-  - group/subgroup/project   # nested as deeply as your groups go
-
 # Optional. Omit for ~/.local/state/prq/state.db.
 # MUST be absolute if you install prq on your PATH — a relative path resolves
 # against the directory you run it from, so a global command would silently create
@@ -28,9 +28,14 @@ gitlab:
 statePath: /abs/path/to/prq/.prq/state.db
 ```
 
-Either key may be omitted. Provider is declared by which list an entry sits in,
-never inferred from the path — `gitlab-org/gitlab` is two segments, exactly like a
-GitHub repo, so depth carries no information.
+An older config that still lists `github:`, `gitlab:` or `people:` is imported
+**once**, into a fresh database, and ignored afterwards — with a notice saying so
+on every run until you delete those keys. Seeding is recorded rather than inferred
+from an empty table: otherwise deleting your last project would resurrect the
+whole file on the next launch.
+
+Provider is declared, never inferred from the path — `gitlab-org/gitlab` is two
+segments, exactly like a GitHub repo, so depth carries no information.
 
 Authentication is per provider and discovered, not configured: `gh auth login` or
 `GITHUB_TOKEN`, and `glab auth login` or `GITLAB_TOKEN`. Each provider reports its
@@ -215,17 +220,39 @@ page with time-to-merge (median **and** p90 — the median alone hides the tail)
 merge rate, review coverage, self-merges, monthly throughput, and its authors and
 reviewers ranked.
 
+Removing a project **untracks** it and keeps its stored rows. Every census read
+filters on tracked projects, so it disappears from every page at once — and adding
+it back restores the history with no re-census, which matters because a census
+takes minutes. Rows belonging to untracked projects are counted on the Settings
+page and can be purged explicitly.
+
 ### People
 
 `/people` is the roster, and a person opens a profile: what they wrote, per
 project, and how they review — reviews given against reviews received.
 
-Two things that page does deliberately.
+Three things that page does deliberately.
 
-**One human, one profile.** The same person usually has an account per forge. Add
-them to `people:` in the config and the profile combines both; otherwise every
-login stands alone. Here, `ermand` on GitHub and `ermandduro` on GitLab measured
-659 and 156 pull requests separately, and neither number was the truth.
+**Names are yours to set.** A forge login is usually not a person's name —
+`kaziu`, `bbregu141`, `maksimiliano.bajo`. Click a name on the roster to edit it
+in place; it is stored and survives everything. The account chip stays visible
+next to it, because once a row says "Marin Hysollari" the chip is the only thing
+left that says which account the numbers came from. Clearing a name falls back to
+the login rather than leaving a blank.
+
+**One human, one profile.** The same person usually has an account per forge.
+Where two rows share a name the roster offers **`same name — merge`** on the spot,
+and a profile can link any account through `link an account`. `unlink` undoes
+either, one account at a time.
+
+Measured on this data: `ermand` and `ermandduro` were 659 and 156 pull requests
+apart, and neither number was the truth. `mhysollari` and `marin.hysollari` were
+`0/0/3` and `13/13/2`; merged, they are one person at `13/13/5` across 3 projects.
+
+The merge affordance exists because of what actually happened here: both halves of
+Marin Hysollari were *named by hand*, eighteen seconds apart, because linking them
+was never offered at the moment the duplicate was obvious. prq never merges logins
+by itself — the same name on two forges is often two people — so it asks.
 
 **Bots are separated, not ranked.** `dependabot` has 126 pull requests and
 `gemini-code-assist` has 549 review acts, which would place a dependency updater
@@ -298,6 +325,9 @@ affordable because the list is explicit and small.
 
 ```bash
 prq census                                 # read every project's full history
+prq projects list                          # what is tracked
+prq projects add github owner/repo         # takes effect immediately
+prq projects rm gitlab group/sub/project   # untracks; stored history survives
 bun run scan owner/repo [owner/repo ...]   # headless, ad-hoc, ignores the store
 bun run scan owner/repo --json             # raw
 bun src/cli.ts --state ./other.db          # use a different store for one run
@@ -324,6 +354,7 @@ OpenTUI's native core, not the application.
 | `src/changes.ts` | pure diff between two syncs |
 | `src/census.ts` | the census contract: history rows, identity, bots |
 | `src/insights.ts` | every figure on the dashboards, pure and clock-injected |
+| `src/tracking.ts` | config seeds the store once, then the store is the truth |
 | `src/providers.ts` | the seam: one operation, two implementations |
 | `src/query.ts` | the GraphQL for a GitHub scan and census |
 | `src/github.ts` | GitHub — two searches unioned, plus the census walk |

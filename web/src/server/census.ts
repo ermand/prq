@@ -110,9 +110,24 @@ function peopleOf(store: Store, rules: { label: string; aliases: { provider: Pro
   );
 }
 
+/**
+ * One predicate, used by every census read. Removing a project untracks it and
+ * keeps its rows — so this is what makes the removal visible everywhere at once,
+ * and what lets a re-add restore the history without the ~2m21s a census costs.
+ */
+function trackedFilter(store: Store): (row: { provider: Provider; repo: string }) => boolean {
+  const keys = new Set(store.projects().map((p) => `${p.provider}:${p.path}`));
+  return (row) => keys.has(`${row.provider}:${row.repo}`);
+}
+
 export const getRepos = createServerFn({ method: "GET" }).handler(() =>
   withStore((store, { people: rules }): ReposPayload => {
-    const prs = store.censusPrs();
+    const tracked = store.projects();
+    const trackedKeys = new Set(tracked.map((p) => `${p.provider}:${p.path}`));
+    // Only tracked rows count anywhere. Removing a project untracks it and keeps
+    // its history on disk, so an unfiltered read would keep showing a project
+    // the driver has stopped following.
+    const prs = store.censusPrs().filter((pr) => trackedKeys.has(`${pr.provider}:${pr.repo}`));
     const runs = store.censusRuns();
     const byKey = new Map<string, CensusPr[]>();
     for (const pr of prs) {
@@ -122,10 +137,13 @@ export const getRepos = createServerFn({ method: "GET" }).handler(() =>
       else byKey.set(key, [pr]);
     }
 
-    // Driven by the census log, not by the rows: a project that was censused and
-    // came back empty must still appear, or it reads as unconfigured.
-    const repos: RepoRow[] = runs.map((run) => {
-      const key = `${run.provider}:${run.repo}`;
+    // Driven by the tracked list, not by the census log. A project added a minute
+    // ago has no run row yet, and omitting it here would leave the driver
+    // wondering whether it took — it appears with an honest zero and a null
+    // census time instead.
+    const repos: RepoRow[] = tracked.map((project) => {
+      const key = `${project.provider}:${project.path}`;
+      const run = runs.find((r) => r.provider === project.provider && r.repo === project.path);
       const rows = byKey.get(key) ?? [];
       const counts: StateCounts = {
         open: rows.filter((r) => r.state === "open").length,
@@ -145,14 +163,14 @@ export const getRepos = createServerFn({ method: "GET" }).handler(() =>
       }
       return {
         key,
-        provider: run.provider,
-        repo: run.repo,
+        provider: project.provider,
+        repo: project.path,
         counts,
         contributors: authors.size,
         lastActivity,
-        censusAt: run.at.toISOString(),
-        failed: run.failed,
-        truncated: run.truncated,
+        censusAt: run?.at.toISOString() ?? null,
+        failed: run?.failed ?? null,
+        truncated: run?.truncated ?? false,
       };
     });
 
@@ -173,7 +191,9 @@ export const getRepos = createServerFn({ method: "GET" }).handler(() =>
       people: peopleOf(store, rules).people.filter((p) =>
         p.aliases.every((a) => !isBot(a.username)),
       ).length,
-      empty: runs.length === 0,
+      // Empty means "nothing to show yet", which is true both before a census and
+      // before any project is tracked — the page's wording covers both.
+      empty: tracked.length === 0,
     };
   }),
 );
@@ -189,6 +209,15 @@ export const getRepo = createServerFn({ method: "GET" })
       const provider = key.slice(0, split);
       const repo = key.slice(split + 1);
       if ((provider !== "github" && provider !== "gitlab") || repo === "") {
+        return { key, insight: null, censusAt: null, failed: null, truncated: false };
+      }
+      // An untracked project reads as absent, not as empty. Its rows are still on
+      // disk and would otherwise render a full page for something the driver
+      // removed.
+      const isTracked = store
+        .projects()
+        .some((p) => p.provider === provider && p.path === repo);
+      if (!isTracked) {
         return { key, insight: null, censusAt: null, failed: null, truncated: false };
       }
       const run = store.censusRuns().find((r) => r.provider === provider && r.repo === repo);
@@ -210,8 +239,11 @@ export const getRepo = createServerFn({ method: "GET" })
 export const getPeople = createServerFn({ method: "GET" }).handler(() =>
   withStore((store, { people: rules }): PeoplePayload => {
     const { people, of } = peopleOf(store, rules);
-    const prs = store.censusPrs();
-    const reviews = store.censusReviews();
+    // Tracked only, matching the projects page exactly. Two pages disagreeing
+    // about a count is the bug this single rule exists to prevent.
+    const onTracked = trackedFilter(store);
+    const prs = store.censusPrs().filter(onTracked);
+    const reviews = store.censusReviews().filter(onTracked);
 
     const tally = new Map<
       string,
@@ -284,8 +316,9 @@ export const getPerson = createServerFn({ method: "GET" })
       // Only this person's rows for the acts they performed, but every row for
       // the reviews they *received* — those live on other people's pull
       // requests. Cheap enough to read the whole census at this size.
-      const prs: CensusPr[] = store.censusPrs();
-      const reviews: CensusReview[] = store.censusReviews();
+      const onTracked = trackedFilter(store);
+      const prs: CensusPr[] = store.censusPrs().filter(onTracked);
+      const reviews: CensusReview[] = store.censusReviews().filter(onTracked);
 
       // Exact only when every forge this person works on records timestamps. One
       // GitLab account is enough to make a merged latency figure a half-truth.

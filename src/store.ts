@@ -23,10 +23,12 @@ import { APP_NAME } from "./config";
 import { isChangeKind, type Change, type ChangeKind } from "./changes";
 import {
   isCensusPr,
+  resolvePeople,
   toCount,
   toPrState,
   type CensusPr,
   type CensusReview,
+  type PersonRule,
   type RepoCensus,
   type ReviewAct,
 } from "./census";
@@ -40,13 +42,13 @@ import {
 } from "./domain";
 
 /** Bumped whenever the schema or the shape of a stored PR changes. */
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 /**
  * The oldest schema version whose stored `pr` payloads this build can still
- * read. v3 only *added* tables, so a v2 database keeps its baseline and the next
- * sync diffs against it instead of resetting — dropping it would cost the driver
- * a change report for nothing.
+ * read. v3 and v4 only *added* tables, so a v2 database keeps its baseline and
+ * the next sync diffs against it instead of resetting — dropping it would cost
+ * the driver a change report for nothing.
  */
 const PAYLOAD_VERSION = 2;
 
@@ -162,6 +164,45 @@ CREATE TABLE IF NOT EXISTS contributor (
   reviews    INTEGER NOT NULL,
   PRIMARY KEY (provider, username)
 );
+
+-- v4. The tracked project list, moved out of config.yaml: presence means
+-- tracked, absence means neither scanned nor shown. Census rows outlive a row
+-- here on purpose (see removeProject), so this table is the only authority on
+-- what a page may display.
+CREATE TABLE IF NOT EXISTS project (
+  provider TEXT NOT NULL,
+  path     TEXT NOT NULL,
+  added_at TEXT NOT NULL,
+  PRIMARY KEY (provider, path)
+);
+
+-- Sparse by design: a row exists only once somebody is named or merged. Every
+-- other identity the census sees still stands alone under provider:username,
+-- which is the id the roster and its URLs already used — so materialising a
+-- person moves nothing.
+CREATE TABLE IF NOT EXISTS person (
+  id         TEXT NOT NULL PRIMARY KEY,
+  label      TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+-- Which forge account belongs to which person. Keyed on the identity, so one
+-- account can never be claimed by two people; a merge rewrites person_id.
+CREATE TABLE IF NOT EXISTS person_alias (
+  provider  TEXT NOT NULL,
+  username  TEXT NOT NULL,
+  person_id TEXT NOT NULL,
+  PRIMARY KEY (provider, username)
+);
+
+-- Small key/value header rows. Holds the seed marker, which has to be a stored
+-- fact rather than an inference: "import the config lists when the project
+-- table is empty" means deleting your last project resurrects the whole config
+-- on the next launch.
+CREATE TABLE IF NOT EXISTS meta (
+  key   TEXT NOT NULL PRIMARY KEY,
+  value TEXT NOT NULL
+);
 `;
 
 /**
@@ -176,6 +217,7 @@ CREATE INDEX IF NOT EXISTS census_pr_by_author ON census_pr(provider, author);
 CREATE INDEX IF NOT EXISTS census_pr_by_state ON census_pr(provider, repo, state);
 CREATE INDEX IF NOT EXISTS census_review_by_pr ON census_review(provider, repo, number);
 CREATE INDEX IF NOT EXISTS census_review_by_reviewer ON census_review(provider, reviewer);
+CREATE INDEX IF NOT EXISTS person_alias_by_person ON person_alias(person_id);
 `;
 
 export interface SyncRecord {
@@ -234,9 +276,9 @@ export interface CensusRun {
 /**
  * One forge identity, derived from the census tables.
  *
- * Per-provider, not per-person: merging identities across forges is a config
- * question (`people:`), and answering it here would bake one build's rules into
- * the file.
+ * Per-provider, not per-person: this counts accounts, and which accounts belong
+ * to one human is `person_alias`'s answer, applied at read time by
+ * `resolvePeople` over `personRules`.
  */
 export interface Contributor {
   provider: Provider;
@@ -245,6 +287,31 @@ export interface Contributor {
   lastSeen: string;
   prs: number;
   reviews: number;
+}
+
+/** One tracked project: a row of the `project` table. */
+export interface TrackedProject {
+  provider: Provider;
+  path: string;
+  /** ISO 8601, from the caller's clock — the store never reads one. */
+  addedAt: string;
+}
+
+interface ProjectRow {
+  provider: string;
+  path: string;
+  added_at: string;
+}
+
+interface PersonRow {
+  id: string;
+  label: string;
+}
+
+interface AliasRow {
+  provider: string;
+  username: string;
+  person_id: string;
 }
 
 interface CensusPrRow {
@@ -318,6 +385,93 @@ const isAct = (raw: unknown): raw is ReviewAct =>
   raw === "changes-requested" ||
   raw === "commented" ||
   raw === "dismissed";
+
+const PROVIDERS: readonly Provider[] = ["github", "gitlab"];
+
+/**
+ * The two project-path shapes, re-expressed here rather than imported.
+ *
+ * `config.ts` owns the same two regexes for the same reason — a GitHub path is
+ * interpolated into a search string, where a third segment or a space can inject
+ * a qualifier and silently widen the scan, while a GitLab path is a GraphQL
+ * variable and only has to catch typos. The store must not depend on the config
+ * loader: a path now arrives from a keystroke, not from a file, and this is the
+ * sink both routes end at. Two lines of duplicated regex is cheaper than the
+ * store knowing what a config file is.
+ */
+const PROJECT_PATH: Record<Provider, RegExp> = {
+  github: /^[\w.-]+\/[\w.-]+$/,
+  gitlab: /^[\w.-]+(?:\/[\w.-]+)+$/,
+};
+
+const PROJECT_SHAPES: Record<Provider, string> = {
+  github: "owner/name",
+  gitlab: "group/project, nested as deeply as needed",
+};
+
+/**
+ * A forge username, not a project path.
+ *
+ * Deliberately stricter than `PROJECT_PATH`: a path accepts `owner/repo`, so
+ * validating an identity as a path would let a project path pose as a person and
+ * claim nobody.
+ */
+const USERNAME = /^[^\s/]+$/;
+
+/** Throws unless the path is one this provider could actually name. */
+function checkPath(provider: Provider, path: string): void {
+  if (!PROJECT_PATH[provider].test(path)) {
+    throw new Error(
+      `a ${provider} project must be ${PROJECT_SHAPES[provider]} — rejected: ` +
+        JSON.stringify(path),
+    );
+  }
+}
+
+function checkUsername(provider: Provider, username: string): void {
+  if (!USERNAME.test(username)) {
+    throw new Error(
+      `a ${provider} username carries no separator and no whitespace — rejected: ` +
+        JSON.stringify(username),
+    );
+  }
+}
+
+/**
+ * A display name, on the way in. Trimmed, sanitised, and never empty: the label
+ * is the only thing distinguishing a named person from a bare login, and a blank
+ * one would render as a person with no name at all.
+ */
+function checkedLabel(label: string): string {
+  const clean = sanitize(label).trim();
+  if (clean === "") throw new Error("a person's name cannot be blank");
+  return clean;
+}
+
+/**
+ * Splits `provider:username` — the id an unmerged identity has always had.
+ *
+ * Null for anything else, which is what a slug id (a config-seeded person) or a
+ * merge target looks like.
+ */
+function identityOf(id: string): { provider: Provider; username: string } | null {
+  const colon = id.indexOf(":");
+  if (colon === -1) return null;
+  const provider = id.slice(0, colon);
+  const username = id.slice(colon + 1);
+  if (!isProvider(provider) || username === "" || !USERNAME.test(username)) return null;
+  return { provider, username };
+}
+
+/** The login half of an id, which is the label a never-named person falls back to. */
+const loginOf = (id: string): string => identityOf(id)?.username ?? id;
+
+/**
+ * The seed marker. Its presence, not the emptiness of `project`, is what stops a
+ * second import: "import when the table is empty" was driven by hand and makes
+ * deleting your last project resurrect the whole config file on the next launch.
+ */
+const SEED_KEY = "tracking.seeded";
 
 /**
  * An optional-equality WHERE clause. Column names are literals from the call
@@ -887,5 +1041,366 @@ export class Store {
     return this.db
       .query<{ n: number }, [string]>("SELECT count(*) AS n FROM sync WHERE provider = ?")
       .get(provider)!.n;
+  }
+
+  /** Every tracked project, ordered as the projects page shows them. */
+  projects(): TrackedProject[] {
+    return this.db
+      .query<ProjectRow, []>("SELECT * FROM project ORDER BY provider, path")
+      .all()
+      .flatMap((row) =>
+        isProvider(row.provider)
+          ? [{ provider: row.provider, path: text(row.path), addedAt: text(row.added_at) }]
+          : [],
+      );
+  }
+
+  /**
+   * The tracked list in the shape `performSync` and `performCensus` take, so the
+   * database drops straight into the place the config lists used to fill.
+   */
+  projectsByProvider(): Record<Provider, string[]> {
+    const by: Record<Provider, string[]> = { github: [], gitlab: [] };
+    for (const project of this.projects()) by[project.provider].push(project.path);
+    return by;
+  }
+
+  /**
+   * Tracks a project. False when it was already tracked — a no-op, not an error,
+   * because the caller is a keystroke and a duplicate is a slip.
+   *
+   * Any census rows it left behind on a previous removal are still on disk, so a
+   * re-add restores the history immediately: the reads filter on this table, not
+   * on the census tables. That is worth having — one project's census measured
+   * 2m21s.
+   */
+  addProject(provider: Provider, path: string, at: Date): boolean {
+    checkPath(provider, path);
+    const run = this.db.transaction(() => {
+      const existing = this.db
+        .query<
+          { n: number },
+          [string, string]
+        >("SELECT count(*) AS n FROM project WHERE provider = ? AND path = ?")
+        .get(provider, path)!.n;
+      if (existing > 0) return false;
+      this.db
+        .query("INSERT INTO project (provider, path, added_at) VALUES (?, ?, ?)")
+        .run(provider, path, at.toISOString());
+      return true;
+    });
+    return run();
+  }
+
+  /**
+   * Untracks a project and **keeps its census rows**. False when it was not
+   * tracked.
+   *
+   * Deleting the rows would make a mis-click cost a full re-census, and every
+   * read already filters on the tracked set, so the rows are invisible until the
+   * project comes back. `purgeUntracked` is the explicit way to reclaim the
+   * space.
+   */
+  removeProject(provider: Provider, path: string): boolean {
+    const run = this.db.transaction(() => {
+      const existing = this.db
+        .query<
+          { n: number },
+          [string, string]
+        >("SELECT count(*) AS n FROM project WHERE provider = ? AND path = ?")
+        .get(provider, path)!.n;
+      if (existing === 0) return false;
+      this.db.query("DELETE FROM project WHERE provider = ? AND path = ?").run(provider, path);
+      return true;
+    });
+    return run();
+  }
+
+  /**
+   * Drops the census history of every untracked project and returns how many
+   * rows went. The counterpart to `removeProject` keeping them: this is the only
+   * way to reclaim the space, and it is never implicit.
+   *
+   * Counts `census_pr` and `census_review` — the history itself. The matching
+   * `census_run` rows go too, being a record of a scan whose rows no longer
+   * exist, but they are metadata and not part of the count.
+   */
+  purgeUntracked(): number {
+    const untracked = (table: string) =>
+      `NOT EXISTS (SELECT 1 FROM project p WHERE p.provider = ${table}.provider AND p.path = ${table}.repo)`;
+    const run = this.db.transaction(() => {
+      // Counted before the delete rather than read back from `changes()`: the
+      // count is the caller's receipt and must not depend on the driver
+      // reporting a row count for a multi-statement transaction.
+      const doomed = this.db
+        .query<{ n: number }, []>(
+          `SELECT (SELECT count(*) FROM census_pr WHERE ${untracked("census_pr")})
+                + (SELECT count(*) FROM census_review WHERE ${untracked("census_review")}) AS n`,
+        )
+        .get()!.n;
+      this.db.run(`DELETE FROM census_pr WHERE ${untracked("census_pr")}`);
+      this.db.run(`DELETE FROM census_review WHERE ${untracked("census_review")}`);
+      // Unconditional, even when the count is zero: a project whose census
+      // failed has a run row and no history, and leaving it behind would keep an
+      // untracked project's last-scanned time on the page.
+      this.db.run(`DELETE FROM census_run WHERE ${untracked("census_run")}`);
+      // `contributor` is derived, so it has to be rebuilt from what is left or
+      // it would keep counting rows that no longer exist.
+      if (doomed > 0) {
+        this.db.run("DELETE FROM contributor");
+        this.db.run(RECOMPUTE_CONTRIBUTORS);
+      }
+      return doomed;
+    });
+    return run();
+  }
+
+  /**
+   * Every stored person, as rules `resolvePeople` can apply.
+   *
+   * The id is always set, which is the whole point: a rule without one derives
+   * its id from its label, so a rename would change the id and orphan every URL
+   * pointing at the person. A person with no aliases left is still returned —
+   * otherwise a name somebody typed would silently vanish from the roster.
+   */
+  personRules(): PersonRule[] {
+    const persons = this.db
+      .query<PersonRow, []>("SELECT id, label FROM person ORDER BY id")
+      .all();
+    const aliases = this.db
+      .query<
+        AliasRow,
+        []
+      >("SELECT provider, username, person_id FROM person_alias ORDER BY provider, username")
+      .all();
+
+    const owned = new Map<string, { provider: Provider; username: string }[]>();
+    for (const row of aliases) {
+      if (!isProvider(row.provider)) continue;
+      const id = text(row.person_id);
+      const list = owned.get(id);
+      const alias = { provider: row.provider, username: text(row.username) };
+      if (list === undefined) owned.set(id, [alias]);
+      else list.push(alias);
+    }
+
+    const rules: PersonRule[] = [];
+    for (const person of persons) {
+      const id = text(person.id);
+      rules.push({ id, label: text(person.label), aliases: owned.get(id) ?? [] });
+      owned.delete(id);
+    }
+    // Alias rows whose person row is missing cannot happen through this API, but
+    // the file is untrusted and a half-applied merge is worse than a nameless
+    // one: it would show one human as two. Honour the grouping the file records,
+    // under the login the person would fall back to anyway.
+    for (const [id, group] of owned) {
+      rules.push({ id, label: loginOf(id), aliases: group });
+    }
+    return rules;
+  }
+
+  /**
+   * Names a person, materialising the row on write.
+   *
+   * The alias row is materialised with it, and that was a bug found by driving
+   * the prototype: accounts were derived from *visible* census rows, so renaming
+   * somebody and then untracking their only project left "Kristi Aziu — no
+   * accounts" on the roster, a name attached to nothing. Anchoring the account
+   * here also makes the row self-contained for a later merge.
+   */
+  renamePerson(id: string, label: string, at: Date): void {
+    if (id === "") throw new Error("a person needs an id to be renamed");
+    const clean = checkedLabel(label);
+    const iso = at.toISOString();
+    const identity = identityOf(id);
+    const run = this.db.transaction(() => {
+      this.db
+        .query(
+          "INSERT INTO person (id, label, updated_at) VALUES (?, ?, ?)" +
+            " ON CONFLICT(id) DO UPDATE SET label = excluded.label, updated_at = excluded.updated_at",
+        )
+        .run(id, clean, iso);
+      // Only an unmerged identity's id names an account. A slug id — a
+      // config-seeded person, or a merge target — claims nothing by itself.
+      if (identity === null) return;
+      // OR IGNORE, not an upsert: if another person already claims this account,
+      // that claim wins. A rename is not a merge and must not steal an alias.
+      this.db
+        .query(
+          "INSERT OR IGNORE INTO person_alias (provider, username, person_id) VALUES (?, ?, ?)",
+        )
+        .run(identity.provider, identity.username, id);
+    });
+    run();
+  }
+
+  /**
+   * Folds one person into another. The target keeps its own id and label, so
+   * every URL pointing at it still resolves. False when the two are the same, or
+   * when `fromId` names nothing this store could move.
+   */
+  mergePersons(fromId: string, intoId: string, at: Date): boolean {
+    if (fromId === intoId || fromId === "" || intoId === "") return false;
+    const from = identityOf(fromId);
+    const iso = at.toISOString();
+    const run = this.db.transaction(() => {
+      const owned = this.db
+        .query<
+          { n: number },
+          [string]
+        >("SELECT count(*) AS n FROM person_alias WHERE person_id = ?")
+        .get(fromId)!.n;
+      const named = this.db
+        .query<{ n: number }, [string]>("SELECT count(*) AS n FROM person WHERE id = ?")
+        .get(fromId)!.n;
+      // Nothing stored, and not an identity id either: there is no person here
+      // to fold, and inventing one would attach an alias to a name nobody uses.
+      if (owned === 0 && named === 0 && from === null) return false;
+
+      if (owned > 0) {
+        this.db
+          .query("UPDATE person_alias SET person_id = ? WHERE person_id = ?")
+          .run(intoId, fromId);
+      } else if (from !== null) {
+        // An identity standing alone owns no alias row, so the move would have
+        // nothing to rewrite. Give it one. The upsert covers the case the roster
+        // cannot actually offer — the account already claimed by a third person —
+        // and keeps the merge total rather than half-applied.
+        this.db
+          .query(
+            "INSERT INTO person_alias (provider, username, person_id) VALUES (?, ?, ?)" +
+              " ON CONFLICT(provider, username) DO UPDATE SET person_id = excluded.person_id",
+          )
+          .run(from.provider, from.username, intoId);
+      }
+
+      // The target must exist as a row now: its label would otherwise fall back
+      // to a login that may no longer be one of its accounts. An existing row
+      // keeps the label it already has — a merge does not rename anybody.
+      this.db
+        .query("INSERT OR IGNORE INTO person (id, label, updated_at) VALUES (?, ?, ?)")
+        .run(intoId, loginOf(intoId), iso);
+
+      // And the target's *own* account is anchored too, exactly as `renamePerson`
+      // does. Without this, merging into an identity that had never been named
+      // produced two people sharing one id: `resolvePeople` saw a rule holding
+      // only the moved alias, then the target's own contributor key fell through
+      // unclaimed and was pushed a second time. One human, listed twice, with the
+      // counts split between the halves.
+      const into = identityOf(intoId);
+      if (into !== null) {
+        this.db
+          .query(
+            "INSERT INTO person_alias (provider, username, person_id) VALUES (?, ?, ?)" +
+              " ON CONFLICT(provider, username) DO UPDATE SET person_id = excluded.person_id",
+          )
+          .run(into.provider, into.username, intoId);
+      }
+
+      this.db.query("DELETE FROM person WHERE id = ?").run(fromId);
+      return true;
+    });
+    return run();
+  }
+
+  /**
+   * Un-claims one account, so it stands alone under its own identity again.
+   * False when no alias row claimed it. The person it left keeps its row: a name
+   * with nothing under it is still a name somebody typed.
+   */
+  splitAlias(provider: Provider, username: string): boolean {
+    checkUsername(provider, username);
+    const run = this.db.transaction(() => {
+      const existing = this.db
+        .query<
+          { n: number },
+          [string, string]
+        >("SELECT count(*) AS n FROM person_alias WHERE provider = ? AND username = ?")
+        .get(provider, username)!.n;
+      if (existing === 0) return false;
+      this.db
+        .query("DELETE FROM person_alias WHERE provider = ? AND username = ?")
+        .run(provider, username);
+      return true;
+    });
+    return run();
+  }
+
+  /** True once the config's lists have been imported into this database. */
+  isSeeded(): boolean {
+    return (
+      this.db
+        .query<{ n: number }, [string]>("SELECT count(*) AS n FROM meta WHERE key = ?")
+        .get(SEED_KEY)!.n > 0
+    );
+  }
+
+  /**
+   * Imports project and person lists once, and records that it happened. False
+   * when this database was already seeded, in which case nothing is written.
+   *
+   * Plain arguments, not a `Config`: the store does not know what a config file
+   * is. The marker is why this is a one-shot — keyed on "the `project` table is
+   * empty" instead, deleting your last project resurrects the whole config file
+   * on the next launch. That was found by driving it by hand.
+   *
+   * Person ids come from `resolvePeople` over the same rules, so a seeded person
+   * gets exactly the id the previous, config-derived build gave them and no
+   * bookmarked profile URL moves.
+   */
+  seedTracking(
+    projects: Record<Provider, string[]>,
+    people: PersonRule[],
+    at: Date,
+  ): boolean {
+    const iso = at.toISOString();
+    const tracked: TrackedProject[] = [];
+    for (const provider of PROVIDERS) {
+      for (const path of projects[provider] ?? []) {
+        checkPath(provider, path);
+        tracked.push({ provider, path, addedAt: iso });
+      }
+    }
+    // Resolved outside the transaction: it throws on a blank label, and a throw
+    // mid-transaction would leave the marker unset with rows already inserted.
+    const seeded = resolvePeople([], people).people.map((person) => ({
+      id: person.id,
+      label: checkedLabel(person.label),
+      aliases: person.aliases.map((alias) => {
+        checkUsername(alias.provider, alias.username);
+        return alias;
+      }),
+    }));
+
+    const run = this.db.transaction(() => {
+      if (this.isSeeded()) return false;
+
+      // Prepared once and reused: a seed is a loop, and the configs this was
+      // driven against list every project a team has.
+      const insertProject = this.db.query(
+        "INSERT OR IGNORE INTO project (provider, path, added_at) VALUES (?, ?, ?)",
+      );
+      for (const project of tracked) {
+        insertProject.run(project.provider, project.path, project.addedAt);
+      }
+
+      const insertPerson = this.db.query(
+        "INSERT OR IGNORE INTO person (id, label, updated_at) VALUES (?, ?, ?)",
+      );
+      const insertAlias = this.db.query(
+        "INSERT OR IGNORE INTO person_alias (provider, username, person_id) VALUES (?, ?, ?)",
+      );
+      for (const person of seeded) {
+        insertPerson.run(person.id, person.label, iso);
+        for (const alias of person.aliases) {
+          insertAlias.run(alias.provider, alias.username, person.id);
+        }
+      }
+
+      this.db.query("INSERT INTO meta (key, value) VALUES (?, ?)").run(SEED_KEY, iso);
+      return true;
+    });
+    return run();
   }
 }
