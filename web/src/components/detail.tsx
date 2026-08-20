@@ -6,6 +6,7 @@
  * evidence, and a browser does not have to choose.
  */
 
+import { Link } from "@tanstack/react-router";
 import { label, type Change } from "../../../src/changes";
 import { BUCKETS, bucketOf, type PullRequest } from "../../../src/domain";
 import { relativeAge } from "../../../src/render";
@@ -44,9 +45,19 @@ export function Detail({
   return (
     <div className="flex h-full flex-col">
       <div className="border-b border-zinc-800 p-4">
+        {/* The panel is the safe place to reach the dashboards. The row itself
+            already carries two targets that must not overlap — select, and leave
+            for the forge — and a third inside it would be a nested anchor. */}
         <div className="flex items-center gap-2 font-mono text-2xs text-zinc-500">
           <span>{providerLabel(pr.provider)}</span>
-          <span className="truncate">{pr.repo}</span>
+          <Link
+            to="/repos"
+            search={{ r: `${pr.provider}:${pr.repo}` }}
+            title="This project's history"
+            className="truncate hover:text-sky-300 hover:underline"
+          >
+            {pr.repo}
+          </Link>
           <span className="text-zinc-400">#{pr.number}</span>
         </div>
 
@@ -78,7 +89,20 @@ export function Detail({
       </div>
 
       <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 border-b border-zinc-800 p-4 text-xs">
-        <Field name="author">{pr.author}</Field>
+        <Field name="author">
+          {pr.author === "" ? (
+            <span className="text-zinc-600">unknown</span>
+          ) : (
+            <Link
+              to="/people"
+              search={{ id: `${pr.provider}:${pr.author}` }}
+              title="This person's profile"
+              className="hover:text-sky-300 hover:underline"
+            >
+              {pr.author}
+            </Link>
+          )}
+        </Field>
         <Field name="standing">{STANDING[pr.standing]}</Field>
         <Field name="verdict">{pr.verdict.replace("-", " ")}</Field>
         <Field name="checks">{pr.checks}</Field>

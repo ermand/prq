@@ -111,7 +111,7 @@ function peopleOf(store: Store, rules: { label: string; aliases: { provider: Pro
 }
 
 export const getRepos = createServerFn({ method: "GET" }).handler(() =>
-  withStore((store): ReposPayload => {
+  withStore((store, { people: rules }): ReposPayload => {
     const prs = store.censusPrs();
     const runs = store.censusRuns();
     const byKey = new Map<string, CensusPr[]>();
@@ -133,10 +133,14 @@ export const getRepos = createServerFn({ method: "GET" }).handler(() =>
         closed: rows.filter((r) => r.state === "closed").length,
         total: rows.length,
       };
+      // Bots excluded: `dependabot` authored 126 pull requests across two of
+      // these projects, and counting a dependency updater under a column headed
+      // "people" is the same lie the roster refuses to tell. A project is
+      // single-forge, so no cross-forge merge can apply within one row.
       const authors = new Set<string>();
       let lastActivity: string | null = null;
       for (const row of rows) {
-        if (row.author !== "") authors.add(row.author);
+        if (row.author !== "" && !isBot(row.author)) authors.add(row.author);
         if (lastActivity === null || row.updatedAt > lastActivity) lastActivity = row.updatedAt;
       }
       return {
@@ -163,7 +167,12 @@ export const getRepos = createServerFn({ method: "GET" }).handler(() =>
         total: prs.length,
       },
       censusAt: oldestCensus(store),
-      people: store.contributors().filter((c) => !isBot(c.username)).length,
+      // Humans, not accounts. Counting identities here read 30 while the roster
+      // read 29, because one had merged the driver's two forge logins and the
+      // other had not — two pages disagreeing about the same quantity.
+      people: peopleOf(store, rules).people.filter((p) =>
+        p.aliases.every((a) => !isBot(a.username)),
+      ).length,
       empty: runs.length === 0,
     };
   }),
