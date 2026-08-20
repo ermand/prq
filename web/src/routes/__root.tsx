@@ -6,6 +6,7 @@ import {
 } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import appCss from "../styles.css?url";
+import { Nav } from "../components/nav";
 
 export const Route = createRootRoute({
   head: () => ({
@@ -18,7 +19,10 @@ export const Route = createRootRoute({
   }),
   component: () => (
     <Shell>
-      <Outlet />
+      <div className="flex h-screen flex-col">
+        <Nav />
+        <Outlet />
+      </div>
     </Shell>
   ),
 });

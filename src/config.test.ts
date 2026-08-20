@@ -134,3 +134,112 @@ describe("loadConfig", () => {
     await expect(loadConfig(path)).rejects.toThrow(/\.prq-test-bad\.yaml: /);
   });
 });
+
+describe("people", () => {
+  const base = "github: [o/a]\n";
+
+  const block = (...lines: string[]) => `${base}people:\n${lines.join("\n")}\n`;
+
+  test("is empty when the block is absent", () => {
+    expect(parseConfig(base).people).toEqual([]);
+  });
+
+  test("is empty when the block is present but empty", () => {
+    expect(parseConfig(`${base}people: []`).people).toEqual([]);
+  });
+
+  test("the shipped example leaves it commented out", () => {
+    expect(parseConfig(EXAMPLE_CONFIG).people).toEqual([]);
+  });
+
+  test("merges one human's two forge logins, github first", () => {
+    // The driver is `ermand` on GitHub and `ermandduro` on GitLab; a profile
+    // that splits them is wrong rather than merely incomplete.
+    const c = parseConfig(
+      block("  - label: Ermand Durro", "    github: ermand", "    gitlab: ermandduro"),
+    );
+    expect(c.people).toEqual([
+      {
+        label: "Ermand Durro",
+        aliases: [
+          { provider: "github", username: "ermand" },
+          { provider: "gitlab", username: "ermandduro" },
+        ],
+      },
+    ]);
+  });
+
+  test("a one-forge entry parses — most people hold a single login", () => {
+    expect(parseConfig(block("  - label: A", "    github: a")).people).toEqual([
+      { label: "A", aliases: [{ provider: "github", username: "a" }] },
+    ]);
+    expect(parseConfig(block("  - label: B", "    gitlab: b")).people).toEqual([
+      { label: "B", aliases: [{ provider: "gitlab", username: "b" }] },
+    ]);
+  });
+
+  test("rejects an entry that claims nobody", () => {
+    expect(() => parseConfig(block("  - label: Nobody"))).toThrow(
+      /`Nobody` claims nobody/,
+    );
+  });
+
+  test("rejects a missing, empty or whitespace label", () => {
+    expect(() => parseConfig(block("  - github: a"))).toThrow(
+      /entry 1 needs a non-empty `label` — rejected: null/,
+    );
+    expect(() => parseConfig(block('  - label: ""', "    github: a"))).toThrow(
+      /needs a non-empty `label` — rejected: ""/,
+    );
+    expect(() => parseConfig(block('  - label: "   "', "    github: a"))).toThrow(
+      /needs a non-empty `label` — rejected: "   "/,
+    );
+  });
+
+  test("rejects a project path where a username belongs", () => {
+    // `isValidGitHubPath` would accept this, which is why it is the wrong check.
+    const bad = block("  - label: A", "    github: owner/repo");
+    expect(() => parseConfig(bad)).toThrow(/`A` needs a `github` username/);
+    expect(() => parseConfig(bad)).toThrow(/rejected: "owner\/repo"/);
+  });
+
+  test("rejects whitespace inside or around a username", () => {
+    expect(() => parseConfig(block("  - label: A", '    gitlab: "two words"'))).toThrow(
+      /`A` needs a `gitlab` username[\s\S]*rejected: "two words"/,
+    );
+    expect(() => parseConfig(block("  - label: A", '    github: " ermand "'))).toThrow(
+      /rejected: " ermand "/,
+    );
+  });
+
+  test("rejects a non-string username", () => {
+    expect(() => parseConfig(block("  - label: A", "    github: 42"))).toThrow(
+      /`A` needs a `github` username[\s\S]*rejected: 42/,
+    );
+  });
+
+  test("rejects an unknown key rather than dropping the alias it meant", () => {
+    expect(() =>
+      parseConfig(block("  - label: A", "    github: a", "    gitlabb: b")),
+    ).toThrow(/`A` has unknown key "gitlabb"/);
+  });
+
+  test("rejects one account claimed by two entries", () => {
+    // Silently merging them would corrupt both profiles.
+    expect(() =>
+      parseConfig(
+        block("  - label: A", "    github: shared", "  - label: B", "    github: shared"),
+      ),
+    ).toThrow(/`github: shared` is claimed by two `people` entries, `A` and `B`/);
+  });
+
+  test("rejects a block that is not a list", () => {
+    expect(() => parseConfig(`${base}people: ermand`)).toThrow(/`people` must be a list/);
+  });
+
+  test("rejects an entry that is not a mapping", () => {
+    expect(() => parseConfig(block("  - ermand"))).toThrow(
+      /entry 1 must be a mapping — rejected: "ermand"/,
+    );
+  });
+});

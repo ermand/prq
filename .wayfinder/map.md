@@ -233,6 +233,39 @@ both belong here rather than in a ticket:
   the diff across a reload**, which the TUI cannot: changes are already on disk, so
   a refresh re-reads them instead of losing them.
 
+- **A census: repo-wide, all-state history, as a second axis** (2026-08-20). The
+  ask was a dashboard with project and contributor pages. The blocking fact was
+  that none of it was computable: the scan is `is:open` **and** `involves:@me`, so
+  it had never seen a merged pull request or one belonging to anybody else. Repo
+  totals and contributor rankings were not missing features, they were missing
+  data. Measured before building: 2181 pull requests and 3565 review acts across
+  20 projects, 55 pages, 2m21s, ~55 rate-limit points of 5000 — affordable as an
+  explicit command, unaffordable on a page load, which settled `prq census` as its
+  own subcommand.
+  Four calls worth keeping.
+  **Separate tables, never shared.** A sync is fast, ego-scoped and destructive; a
+  census is slow, repo-wide and accumulative. A failed census records the failure
+  and leaves prior history alone, mirroring the rule that a partial scan is shown
+  and never committed.
+  **`since` is deliberately not exposed.** `writeCensus` is a full replace scoped
+  to one project, so a bounded walk would delete the history and write back only
+  the recent slice — the flag would destroy exactly what it appears to preserve.
+  Incremental needs a merging write first.
+  **One human, one profile.** The same person holds an account per forge, and
+  `ermand`/`ermandduro` measured 659 and 156 pull requests apart. A performance
+  profile split in half is not incomplete, it is wrong, so `people:` merges them
+  and everything unclaimed stands alone.
+  **Bots are named, not inferred.** `dependabot` (126 pull requests) and
+  `gemini-code-assist` (549 review acts, zero authored) would outrank most of the
+  staff. They are excluded by default and the count is stated. Detection is by
+  name on purpose: "reviews constantly, authors nothing" describes the AI reviewer
+  and equally describes a tech lead, so a behavioural rule would silently
+  reclassify people.
+  And one thing the data cannot do, recorded because the pages are aimed at
+  performance review: a pull request is one row whether it is a 4000-line
+  generated migration or a one-line fix to a race condition. Neither forge records
+  the difference. The profile page states this above its own numbers.
+
 ## Not yet specified
 
 - **Cursor paging, and what a project too big to scan means.** Truncation is now
@@ -243,11 +276,12 @@ both belong here rather than in a ticket:
   thinner field set, or may simply not belong on a personal review board. Not
   sharp enough to ticket until someone wants to track a project that large.
 
-- **Storing review activity as a work history.** Beyond this tool — a durable,
-  queryable record of review activity over time, feeding things that are not this
-  dashboard. Raised while widening the destination and deliberately left here: it
-  stops being a PR dashboard, so if it is wanted it is a fresh map, not a
-  continuation of this one.
+- ~~**Storing review activity as a work history.**~~ Built, and the judgement
+  above it was wrong. It read "it stops being a PR dashboard, so if it is wanted
+  it is a fresh map, not a continuation of this one" — and then the driver asked
+  for it here. It did not need a fresh map because it did not touch the board:
+  the census is a second axis beside the scan, its own tables and its own
+  command, and `domain.ts` never learned about it. See the census decision above.
 - **Degraded and error states.** The failure surface shrank with the scan design —
   two cheap queries, either of which can return an HTML 502 that will not parse as
   JSON, or an HTTP 200 carrying partial `data` plus a per-field `errors[]` array.

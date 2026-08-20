@@ -5,7 +5,57 @@ import { rm } from "node:fs/promises";
 import { existsSync, statSync } from "node:fs";
 import { diff } from "./changes";
 import { normalize, type PullRequest, type RawPullRequest } from "./domain";
+import type { CensusPr, CensusReview, RepoCensus } from "./census";
 import { resolveStorePath, SCHEMA_VERSION, Store, storePath } from "./store";
+
+const AT = new Date("2026-06-01T00:00:00.000Z");
+
+function censusPr(over: Partial<CensusPr> = {}): CensusPr {
+  return {
+    provider: "github",
+    repo: "org/repo",
+    number: 1,
+    state: "merged",
+    draft: false,
+    title: "A change",
+    url: "https://github.com/org/repo/pull/1",
+    author: "alice",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-05T00:00:00.000Z",
+    mergedAt: "2026-01-05T00:00:00.000Z",
+    closedAt: null,
+    additions: 10,
+    deletions: 2,
+    files: 3,
+    mergedBy: "bob",
+    ...over,
+  };
+}
+
+function censusReview(over: Partial<CensusReview> = {}): CensusReview {
+  return {
+    provider: "github",
+    repo: "org/repo",
+    number: 1,
+    reviewer: "bob",
+    act: "approved",
+    at: "2026-01-04T00:00:00.000Z",
+    ...over,
+  };
+}
+
+function census(over: Partial<RepoCensus> = {}): RepoCensus {
+  return {
+    provider: "github",
+    repo: "org/repo",
+    prs: [censusPr()],
+    reviews: [censusReview()],
+    reviewPrecision: "exact",
+    failed: null,
+    truncated: false,
+    ...over,
+  };
+}
 
 function pr(over: Partial<PullRequest> = {}): PullRequest {
   const base = normalize(
@@ -223,6 +273,68 @@ describe("migration", () => {
     expect(state.prs).toEqual([]);
     expect(state.incomplete).toBe(true);
     expect(state.changes).toEqual([]);
+    store.close();
+    await wipe();
+  });
+
+  test("a v2 database gains the census tables and keeps its scan state", async () => {
+    // v3 only added tables. The baseline is still diffable, so dropping it would
+    // cost the driver a change report for nothing.
+    await wipe();
+    const v2 = new Database(path, { create: true });
+    v2.run("PRAGMA journal_mode = WAL");
+    v2.run(
+      "CREATE TABLE sync (id INTEGER PRIMARY KEY AUTOINCREMENT, provider TEXT NOT NULL, at TEXT NOT NULL, viewer TEXT NOT NULL, repos TEXT NOT NULL, pr_count INTEGER NOT NULL, baseline_reset INTEGER NOT NULL DEFAULT 0)",
+    );
+    v2.run(
+      "CREATE TABLE pr (id TEXT PRIMARY KEY, provider TEXT NOT NULL, synced INTEGER NOT NULL, payload TEXT NOT NULL)",
+    );
+    v2.run(
+      "CREATE TABLE change (sync_id INTEGER NOT NULL REFERENCES sync(id) ON DELETE CASCADE, pr_id TEXT NOT NULL, kind TEXT NOT NULL, from_v TEXT, to_v TEXT, PRIMARY KEY (sync_id, pr_id, kind))",
+    );
+    const kept = pr();
+    v2.run(
+      "INSERT INTO sync (provider, at, viewer, repos, pr_count, baseline_reset) VALUES (?, ?, ?, ?, ?, 0)",
+      ["github", "2026-01-01T00:00:00Z", "ermand", '["org/repo"]', 1],
+    );
+    v2.run("INSERT INTO pr (id, provider, synced, payload) VALUES (?, ?, ?, ?)", [
+      kept.id,
+      "github",
+      1,
+      JSON.stringify(kept),
+    ]);
+    v2.run(
+      "INSERT INTO change (sync_id, pr_id, kind) VALUES (1, ?, 'joined')",
+      [kept.id],
+    );
+    v2.run("PRAGMA user_version = 2");
+    v2.close();
+
+    const store = await Store.open(path);
+    // @ts-expect-error — reading the private handle to assert the pragma.
+    expect(store.db.query("PRAGMA user_version").get().user_version).toBe(3);
+    // @ts-expect-error — reading the private handle to assert the new tables.
+    const tables: { name: string }[] = store.db
+      .query(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND (name LIKE 'census%' OR name = 'contributor') ORDER BY name",
+      )
+      .all();
+    expect(tables.map((t) => t.name)).toEqual([
+      "census_pr",
+      "census_review",
+      "census_run",
+      "contributor",
+    ]);
+
+    const state = store.read("github");
+    expect(state.incomplete).toBe(false);
+    expect(state.prs).toHaveLength(1);
+    expect(state.changes).toEqual([{ prId: kept.id, kind: "joined", from: null, to: null }]);
+    expect(store.syncCount()).toBe(1);
+
+    // And the census side is live on the migrated file.
+    store.writeCensus(census(), AT);
+    expect(store.censusPrs()).toHaveLength(1);
     store.close();
     await wipe();
   });
@@ -481,6 +593,310 @@ describe("the stored viewer crosses the trust boundary", () => {
     const store = await mem();
     commit(store, [pr()]);
     expect(store.lastSync("github")?.viewer).toBe("ermand");
+    store.close();
+  });
+});
+
+describe("the census", () => {
+  test("round-trips through storage", async () => {
+    const store = await mem();
+    const written = census();
+    store.writeCensus(written, AT);
+    expect(store.censusPrs()).toEqual(written.prs);
+    expect(store.censusReviews()).toEqual(written.reviews);
+    expect(store.censusRuns()).toEqual([
+      {
+        provider: "github",
+        repo: "org/repo",
+        at: AT,
+        prs: 1,
+        reviews: 1,
+        failed: null,
+        truncated: false,
+      },
+    ]);
+    store.close();
+  });
+
+  test("re-censusing a project replaces rather than duplicates", async () => {
+    // The point of the full replace: an upsert would leave a pull request the
+    // walk no longer sees sitting in the dashboard forever.
+    const store = await mem();
+    store.writeCensus(census({ prs: [censusPr(), censusPr({ number: 2 })] }), AT);
+    expect(store.censusPrs()).toHaveLength(2);
+
+    const later = new Date("2026-07-01T00:00:00.000Z");
+    store.writeCensus(
+      census({
+        prs: [censusPr({ title: "Retitled" })],
+        reviews: [censusReview(), censusReview({ act: "commented" })],
+      }),
+      later,
+    );
+    const prs = store.censusPrs();
+    expect(prs).toHaveLength(1);
+    expect(prs[0]!.title).toBe("Retitled");
+    expect(store.censusReviews()).toHaveLength(2);
+    expect(store.censusRuns()).toHaveLength(1);
+    expect(store.censusRuns()[0]!.at).toEqual(later);
+    store.close();
+  });
+
+  test("censusing one project leaves another's rows intact", async () => {
+    const store = await mem();
+    store.writeCensus(census(), AT);
+    store.writeCensus(
+      census({
+        repo: "org/other",
+        prs: [censusPr({ repo: "org/other", number: 7, author: "carol" })],
+        reviews: [censusReview({ repo: "org/other", number: 7 })],
+      }),
+      AT,
+    );
+    expect(store.censusPrs()).toHaveLength(2);
+
+    store.writeCensus(census({ prs: [], reviews: [] }), AT);
+    expect(store.censusPrs().map((p) => p.repo)).toEqual(["org/other"]);
+    expect(store.censusReviews().map((r) => r.repo)).toEqual(["org/other"]);
+    store.close();
+  });
+
+  test("two projects can share a pull request number", async () => {
+    // The primary key is (provider, repo, number). Keying on number alone would
+    // make the second project's #1 evict the first's.
+    const store = await mem();
+    store.writeCensus(census(), AT);
+    store.writeCensus(
+      census({ repo: "org/other", prs: [censusPr({ repo: "org/other" })], reviews: [] }),
+      AT,
+    );
+    store.writeCensus(
+      census({
+        provider: "gitlab",
+        repo: "group/sub/proj",
+        prs: [censusPr({ provider: "gitlab", repo: "group/sub/proj", url: null })],
+        reviews: [],
+        reviewPrecision: "approximate",
+      }),
+      AT,
+    );
+    expect(store.censusPrs().map((p) => `${p.provider}:${p.repo}`)).toEqual([
+      "github:org/other",
+      "github:org/repo",
+      "gitlab:group/sub/proj",
+    ]);
+    store.close();
+  });
+
+  test("a failed census preserves stored rows and still records the run", async () => {
+    // Same rule `commit` follows for a partial scan: a hole committed as truth
+    // is inherited by every later reading of the project.
+    const store = await mem();
+    store.writeCensus(census(), AT);
+
+    const failedAt = new Date("2026-07-01T00:00:00.000Z");
+    store.writeCensus(
+      census({ prs: [], reviews: [], failed: "401 Unauthorized", truncated: false }),
+      failedAt,
+    );
+    expect(store.censusPrs()).toHaveLength(1);
+    expect(store.censusReviews()).toHaveLength(1);
+    expect(store.contributors()).toHaveLength(2);
+
+    const [run] = store.censusRuns();
+    expect(run!.failed).toBe("401 Unauthorized");
+    expect(run!.at).toEqual(failedAt);
+    expect(run!.prs).toBe(0);
+    store.close();
+  });
+
+  test("truncation is recorded", async () => {
+    const store = await mem();
+    store.writeCensus(census({ truncated: true }), AT);
+    expect(store.censusRuns()[0]!.truncated).toBe(true);
+    store.close();
+  });
+
+  test("filters narrow the rows", async () => {
+    const store = await mem();
+    store.writeCensus(
+      census({
+        prs: [censusPr(), censusPr({ number: 2, author: "carol" })],
+        reviews: [censusReview(), censusReview({ number: 2, reviewer: "alice" })],
+      }),
+      AT,
+    );
+    store.writeCensus(
+      census({
+        provider: "gitlab",
+        repo: "group/proj",
+        prs: [censusPr({ provider: "gitlab", repo: "group/proj", author: "alice" })],
+        reviews: [censusReview({ provider: "gitlab", repo: "group/proj", at: null })],
+        reviewPrecision: "approximate",
+      }),
+      AT,
+    );
+
+    expect(store.censusPrs({ provider: "gitlab" }).map((p) => p.repo)).toEqual([
+      "group/proj",
+    ]);
+    expect(store.censusPrs({ repo: "org/repo" })).toHaveLength(2);
+    expect(store.censusPrs({ author: "alice" }).map((p) => p.provider)).toEqual([
+      "github",
+      "gitlab",
+    ]);
+    expect(store.censusPrs({ provider: "github", author: "carol" })).toHaveLength(1);
+    expect(store.censusReviews({ reviewer: "alice" })).toHaveLength(1);
+    expect(store.censusReviews({ provider: "gitlab" })[0]!.at).toBeNull();
+    store.close();
+  });
+
+  test("contributors are derived, including review-only identities", async () => {
+    const store = await mem();
+    store.writeCensus(
+      census({
+        prs: [
+          censusPr({
+            number: 1,
+            author: "alice",
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-05T00:00:00.000Z",
+          }),
+          censusPr({
+            number: 2,
+            author: "alice",
+            createdAt: "2026-02-01T00:00:00.000Z",
+            updatedAt: "2026-02-09T00:00:00.000Z",
+          }),
+        ],
+        reviews: [
+          censusReview({ number: 1, reviewer: "bob", at: "2026-01-04T00:00:00.000Z" }),
+          censusReview({
+            number: 2,
+            reviewer: "bob",
+            act: "changes-requested",
+            at: "2026-03-01T00:00:00.000Z",
+          }),
+        ],
+      }),
+      AT,
+    );
+
+    expect(store.contributors()).toEqual([
+      {
+        provider: "github",
+        username: "alice",
+        firstSeen: "2026-01-01T00:00:00.000Z",
+        lastSeen: "2026-02-09T00:00:00.000Z",
+        prs: 2,
+        reviews: 0,
+      },
+      // Review-only, and the later of its two review timestamps is later than
+      // anything it authored — because it authored nothing.
+      {
+        provider: "github",
+        username: "bob",
+        firstSeen: "2026-01-04T00:00:00.000Z",
+        lastSeen: "2026-03-01T00:00:00.000Z",
+        prs: 0,
+        reviews: 2,
+      },
+    ]);
+    store.close();
+  });
+
+  test("a timestampless reviewer is bounded by the pull request it reviewed", async () => {
+    // GitLab's `approvedBy` carries no time, and the reviewed merge request is
+    // the tightest bound left.
+    const store = await mem();
+    store.writeCensus(
+      census({
+        provider: "gitlab",
+        repo: "group/proj",
+        reviewPrecision: "approximate",
+        prs: [
+          censusPr({
+            provider: "gitlab",
+            repo: "group/proj",
+            author: "alice",
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-05T00:00:00.000Z",
+          }),
+        ],
+        reviews: [
+          censusReview({
+            provider: "gitlab",
+            repo: "group/proj",
+            reviewer: "dana",
+            at: null,
+          }),
+        ],
+      }),
+      AT,
+    );
+    expect(store.contributors().find((c) => c.username === "dana")).toEqual({
+      provider: "gitlab",
+      username: "dana",
+      firstSeen: "2026-01-01T00:00:00.000Z",
+      lastSeen: "2026-01-05T00:00:00.000Z",
+      prs: 0,
+      reviews: 1,
+    });
+    store.close();
+  });
+
+  test("the hidden-account author is not a contributor", async () => {
+    // The trust boundary yields "" for a deleted account. It is not a person.
+    const store = await mem();
+    store.writeCensus(
+      census({
+        prs: [censusPr({ author: "", mergedBy: "" })],
+        reviews: [censusReview({ reviewer: "" })],
+      }),
+      AT,
+    );
+    expect(store.contributors()).toEqual([]);
+    expect(store.censusPrs()).toHaveLength(1);
+    store.close();
+  });
+
+  test("contributors span projects and are recomputed on every replace", async () => {
+    const store = await mem();
+    store.writeCensus(census(), AT);
+    store.writeCensus(
+      census({
+        repo: "org/other",
+        prs: [censusPr({ repo: "org/other", author: "alice" })],
+        reviews: [],
+      }),
+      AT,
+    );
+    expect(store.contributors().find((c) => c.username === "alice")?.prs).toBe(2);
+
+    store.writeCensus(census({ repo: "org/other", prs: [], reviews: [] }), AT);
+    expect(store.contributors().find((c) => c.username === "alice")?.prs).toBe(1);
+    store.close();
+  });
+
+  test("a tampered census row is dropped rather than painted", async () => {
+    const store = await mem();
+    store.writeCensus(census({ prs: [censusPr(), censusPr({ number: 2 })] }), AT);
+    // @ts-expect-error — reaching the private handle to simulate tampering.
+    store.db.query("UPDATE census_pr SET provider = 'forgejo' WHERE number = 2").run();
+    // @ts-expect-error — reaching the private handle to simulate tampering.
+    store.db.query("UPDATE census_pr SET title = ? WHERE number = 1").run("a\u001b[2Jb");
+    const prs = store.censusPrs();
+    expect(prs).toHaveLength(1);
+    expect(prs[0]!.title).toBe("a [2Jb");
+    store.close();
+  });
+
+  test("an unsubmittable url is refused on the way out", async () => {
+    const store = await mem();
+    store.writeCensus(census(), AT);
+    // @ts-expect-error — reaching the private handle to simulate tampering.
+    store.db.query("UPDATE census_pr SET url = 'javascript:alert(1)'").run();
+    expect(store.censusPrs()[0]!.url).toBeNull();
     store.close();
   });
 });

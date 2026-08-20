@@ -40,6 +40,36 @@ export function Badge({
   );
 }
 
+/**
+ * A filter that lives in the URL, so it survives a reload and can be shared.
+ *
+ * Rendered as a link rather than a button precisely because it is navigation:
+ * middle-click opens the filtered board in a tab, and the back button undoes
+ * the filter. A button would have to reimplement both, badly.
+ */
+export function Pill({
+  active,
+  children,
+  title,
+}: {
+  active: boolean;
+  children: ReactNode;
+  title?: string;
+}) {
+  return (
+    <span
+      title={title}
+      className={`rounded border px-2 py-1 text-xs transition-colors ${
+        active
+          ? "border-sky-600/60 bg-sky-500/15 text-sky-200"
+          : "border-zinc-700 text-zinc-400 hover:border-zinc-500 hover:text-zinc-100"
+      }`}
+    >
+      {children}
+    </span>
+  );
+}
+
 /** Ordered by urgency, matching the bucket order in `domain.ts`. */
 export const BUCKET_TONE: Record<BucketId, { bar: string; dot: string }> = {
   1: { bar: "bg-amber-400", dot: "bg-amber-400" },

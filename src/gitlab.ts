@@ -13,6 +13,11 @@
  *
  * How GitLab's states map onto the taxonomy is wayfinder ticket 0021, still open —
  * the mappings here are prototype-grade and flagged where they are lossy.
+ *
+ * `gitlabCensus` is the other axis: every merge request in one project, whatever
+ * its state and whoever opened it. It shares this module's transport and token
+ * path on purpose — a census is several pages of requests, so it is *more*
+ * exposed to a lapsing OAuth token than a scan is, not less.
  */
 
 import {
@@ -28,6 +33,20 @@ import {
   type Standing,
   type Verdict,
 } from "./domain";
+import {
+  MAX_PAGES,
+  PAGE_SIZE as CENSUS_PAGE,
+  toCount,
+  toLogin,
+  toPrState,
+  toReviewAct,
+  toTime,
+  type CensusClient,
+  type CensusPr,
+  type CensusReview,
+  type RepoCensus,
+  type ReviewAct,
+} from "./census";
 import type { ProviderClient, ProviderScan } from "./providers";
 
 const ENDPOINT = "https://gitlab.com/api/graphql";
@@ -326,11 +345,7 @@ export function normalizeMergeRequest(
   };
 }
 
-async function post(
-  token: string,
-  variables: { paths: string[]; first: number },
-  signal?: AbortSignal,
-): Promise<{
+interface ScanData {
   currentUser: { username: string } | null;
   projects: {
     nodes: Array<{
@@ -342,7 +357,20 @@ async function post(
       };
     }>;
   };
-}> {
+}
+
+/**
+ * The single HTTP path to GitLab. The scan and the census share it so status,
+ * non-JSON body and GraphQL `errors` are handled once — and so neither drifts
+ * onto `glab api graphql`, which cannot send list variables at all and hijacks
+ * any document mentioning `__type` or `__schema`.
+ */
+async function graphql<T>(
+  token: string,
+  query: string,
+  variables: Record<string, unknown>,
+  signal?: AbortSignal,
+): Promise<T> {
   const response = await fetch(ENDPOINT, {
     method: "POST",
     headers: {
@@ -350,7 +378,7 @@ async function post(
       "content-type": "application/json",
       "user-agent": "prq",
     },
-    body: JSON.stringify({ query: SCAN_QUERY, variables }),
+    body: JSON.stringify({ query, variables }),
     signal,
   });
 
@@ -378,7 +406,7 @@ async function post(
     );
   }
   if (!parsed.data) throw new GitLabError("GitLab returned no data");
-  return parsed.data as Awaited<ReturnType<typeof post>>;
+  return parsed.data as T;
 }
 
 const HOST = "gitlab.com";
@@ -457,7 +485,12 @@ export const gitlab: ProviderClient = {
   async scan(projects, token, signal): Promise<ProviderScan> {
     if (projects.length === 0) return { rows: [], failed: [], viewer: "" };
 
-    const data = await post(token, { paths: projects, first: PAGE_SIZE }, signal);
+    const data = await graphql<ScanData>(
+      token,
+      SCAN_QUERY,
+      { paths: projects, first: PAGE_SIZE },
+      signal,
+    );
     const viewer = data.currentUser?.username ?? "";
     if (viewer === "") {
       throw new GitLabError("GitLab did not identify the authenticated user");
@@ -491,5 +524,229 @@ export const gitlab: ProviderClient = {
     }
 
     return { rows, failed, viewer };
+  },
+};
+
+/**
+ * The census selection, verified live against a 329-MR project: one request per
+ * page of 100, ~2.6s, cursor paging present, no errors. `state: all` is the whole
+ * point — the scan asks `state: opened` and has therefore never seen a merged MR.
+ *
+ * `$path` is bound as a variable rather than interpolated. Project paths come
+ * from config, are validated per provider before they reach here, and a variable
+ * keeps a stray brace a bad path instead of a query rewrite.
+ *
+ * One deviation from the brief, established by probing the live API: GitLab *does*
+ * expose `closedAt` on a merge request, and it is populated on closed MRs (iid
+ * 320: closedAt 2026-04-22T12:38:14Z). Selecting it beats deriving the date from
+ * `updatedAt`, which drifts forward every time somebody comments on a closed MR.
+ */
+const CENSUS_QUERY = `
+query Census($path: ID!, $first: Int!, $after: String) {
+  project(fullPath: $path) {
+    mergeRequests(state: all, first: $first, after: $after) {
+      count
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        iid title webUrl state draft createdAt updatedAt mergedAt closedAt
+        author { username }
+        mergeUser { username }
+        diffStatsSummary { additions deletions fileCount }
+        approvedBy { nodes { username } }
+        reviewers { nodes { username mergeRequestInteraction { reviewState } } }
+      }
+    }
+  }
+}`;
+
+interface RawCensusMr {
+  /** A string over the wire — `"329"` — while `CensusPr.number` is a number. */
+  iid: string;
+  title: string | null;
+  webUrl: string | null;
+  /** Lowercase: `opened`, `merged`, `closed`, `locked`. `toPrState` folds all four. */
+  state: string | null;
+  draft: boolean | null;
+  createdAt: string;
+  updatedAt: string;
+  mergedAt: string | null;
+  closedAt: string | null;
+  author: UserRef | null;
+  mergeUser: UserRef | null;
+  /** Null on an MR whose diff GitLab has not computed. */
+  diffStatsSummary: { additions: number; deletions: number; fileCount: number } | null;
+  approvedBy: { nodes: UserRef[] } | null;
+  reviewers: {
+    nodes: Array<UserRef & { mergeRequestInteraction: { reviewState: string | null } | null }>;
+  } | null;
+}
+
+interface CensusData {
+  /** Null — with HTTP 200 and no `errors` — when the path is unknown or hidden. */
+  project: {
+    mergeRequests: {
+      count: number;
+      pageInfo: { hasNextPage: boolean; endCursor: string | null } | null;
+      nodes: RawCensusMr[] | null;
+    };
+  } | null;
+}
+
+/**
+ * Review acts for one merge request.
+ *
+ * Two sources describing one truth: `approvedBy` lists the current approvals, and
+ * a reviewer's `reviewState` may say `APPROVED` about the same act. Keying by
+ * reviewer *and* act collapses that pair into one row, while still allowing one
+ * reviewer to hold two distinct acts.
+ *
+ * `at` is null on every row. Neither source carries a timestamp, so review latency
+ * here is unknowable rather than zero — which is why the census reports
+ * `reviewPrecision: "approximate"` and anything latency-shaped must be withheld.
+ */
+function censusReviewsOf(repo: string, number: number, mr: RawCensusMr): CensusReview[] {
+  const rows: CensusReview[] = [];
+  const seen = new Set<string>();
+  const add = (username: unknown, act: ReviewAct | null): void => {
+    const reviewer = toLogin(username);
+    if (reviewer === "" || act === null) return;
+    const key = `${reviewer}\u0000${act}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    rows.push({ provider: "gitlab", repo, number, reviewer, act, at: null });
+  };
+  for (const user of mr.approvedBy?.nodes ?? []) add(user?.username, "approved");
+  for (const user of mr.reviewers?.nodes ?? []) {
+    add(user?.username, toReviewAct(user?.mergeRequestInteraction?.reviewState));
+  }
+  return rows;
+}
+
+function censusPrOf(repo: string, mr: RawCensusMr): CensusPr {
+  const iid = Number.parseInt(mr.iid, 10);
+  const state = toPrState(mr.state);
+  const updatedAt = toTime(mr.updatedAt) ?? "";
+  return {
+    provider: "gitlab",
+    repo,
+    // A malformed iid yields NaN, which is still `typeof "number"` and would then
+    // poison every numeric comparison and every keyed lookup it reached.
+    number: Number.isInteger(iid) ? iid : 0,
+    state,
+    draft: mr.draft === true,
+    title: sanitize(mr.title ?? ""),
+    url: safeUrl(mr.webUrl),
+    author: toLogin(mr.author?.username),
+    createdAt: toTime(mr.createdAt) ?? "",
+    updatedAt,
+    mergedAt: toTime(mr.mergedAt),
+    // `closedAt` is selected and authoritative; `updatedAt` stands in only when a
+    // closed MR carries none, which older rows do. Null on anything not closed, so
+    // nothing downstream mistakes an open MR's last touch for a closing date.
+    closedAt: state === "closed" ? (toTime(mr.closedAt) ?? (updatedAt || null)) : null,
+    additions: toCount(mr.diffStatsSummary?.additions),
+    deletions: toCount(mr.diffStatsSummary?.deletions),
+    files: toCount(mr.diffStatsSummary?.fileCount),
+    mergedBy: state === "merged" ? toLogin(mr.mergeUser?.username) : "",
+  };
+}
+
+export const gitlabCensus: CensusClient = {
+  async censusRepo(repo, since, signal): Promise<RepoCensus> {
+    // The scan's token path, including the OAuth staleness check, for a sharper
+    // reason than the scan has: a census is ~6 pages at ~2.6s each against the
+    // configured projects, and glab's OAuth token lives two hours, so a token
+    // that lapses mid-walk abandons a multi-minute walk with a bare 401.
+    const token = await gitlab.token();
+
+    // Both sides of the comparison must be canonical: GitLab returns offsets, not
+    // always `Z`, and a watermark is caller-supplied. Compared as strings, which
+    // is only chronological once the offsets agree.
+    const watermark = since === null || since === "" ? null : canonicalTime(since);
+
+    const prs: CensusPr[] = [];
+    const reviews: CensusReview[] = [];
+    let after: string | null = null;
+    let truncated = false;
+    let failed: string | null = null;
+
+    try {
+      for (let page = 0; ; page += 1) {
+        if (page >= MAX_PAGES) {
+          // A prefix is reported as one, never returned as if it were the whole.
+          truncated = true;
+          break;
+        }
+        // A census is minutes long, so cancellation is checked at every page
+        // boundary as well as inside the request.
+        signal?.throwIfAborted();
+
+        // Annotated, not inferred: `after` is reassigned from this response, and
+        // the object literal's contextual type otherwise makes the compiler
+        // chase `data` -> `endCursor` -> `after` -> `data` and fall back to
+        // `any` (TS7022).
+        const data: CensusData = await graphql<CensusData>(
+          token,
+          CENSUS_QUERY,
+          { path: repo, first: CENSUS_PAGE, after },
+          signal,
+        );
+        const connection = data.project?.mergeRequests;
+        if (!connection) {
+          // HTTP 200, no `errors`, just a null project. The scan's wording, since
+          // it is the same condition: unknown path or no access.
+          failed = `gitlab: ${repo} is unreachable — check the path and your access`;
+          break;
+        }
+
+        let reached = false;
+        for (const node of connection.nodes ?? []) {
+          const createdAt = toTime(node.createdAt) ?? "";
+          // The connection is ordered created_at DESC (verified live: the highest
+          // iid arrives first), so `createdAt` is the only key monotone across
+          // this stream and the early stop has to cut on it. The cost is real and
+          // one-sided: an old MR updated after the watermark is not revisited,
+          // where GitHub's UPDATED_AT-ordered walk would catch it. A caller that
+          // needs late edits to old MRs must walk without `since`.
+          if (watermark !== null && createdAt !== "" && createdAt <= watermark) {
+            reached = true;
+            break;
+          }
+          const row = censusPrOf(repo, node);
+          prs.push(row);
+          reviews.push(...censusReviewsOf(repo, row.number, node));
+        }
+        if (reached) break;
+
+        const { hasNextPage, endCursor } = connection.pageInfo ?? {};
+        // No cursor means there is nowhere to go, whatever `hasNextPage` claims —
+        // re-requesting page one forever is the failure mode `MAX_PAGES` bounds.
+        if (hasNextPage !== true || !endCursor) break;
+        after = endCursor;
+      }
+    } catch (error) {
+      // The caller's own abort is not a project failure; reporting it as one would
+      // mark every repo unreachable on a cancelled census.
+      if (signal?.aborted) throw error;
+      const detail = sanitize(error instanceof Error ? error.message : String(error));
+      // A token this process holds must never reach output, and a failure message
+      // can carry server text. Replacing the exact secret is the only guard that
+      // does not depend on guessing its shape: `glpat-`, `gloas-` and OAuth
+      // bearers all differ.
+      failed = `gitlab: ${repo} census failed — ${token === "" ? detail : detail.split(token).join("***")}`;
+    }
+
+    return {
+      provider: "gitlab",
+      repo,
+      // `failed` means the rows cannot be trusted, so none of them are handed on —
+      // a half-walked project must not read as a complete one.
+      prs: failed === null ? prs : [],
+      reviews: failed === null ? reviews : [],
+      // Never `exact`: no GitLab review source carries a timestamp.
+      reviewPrecision: "approximate",
+      failed,
+      truncated: failed === null && truncated,
+    };
   },
 };

@@ -16,6 +16,7 @@ import { dirname, join } from "node:path";
 import { configPath, EXAMPLE_CONFIG, loadConfig } from "./config";
 import {
   oldestSync,
+  performCensus,
   performSync,
   readAll,
   viewersOf,
@@ -179,6 +180,7 @@ async function main(): Promise<void> {
         "  prq            open the dashboard on the last synced state\n" +
         "  prq web        open the same board in a browser\n" +
         "  prq sync       sync every configured provider, then report what changed\n" +
+        "  prq census     read every project's full history, for the dashboards\n" +
         "  prq init       write an example config\n" +
         "  --state <path> use this state database instead of the configured one\n" +
         "  --port <n>     port for `web` (default 4177)\n" +
@@ -220,6 +222,25 @@ async function main(): Promise<void> {
         process.stdout.write(`${p.provider}: ${p.prs.length} open, ${state}\n`);
       }
       if (outcome.failures.length > 0) throw new SilentFailure();
+      return;
+    }
+
+    if (command === "census") {
+      // Progress is printed as each project lands, not collected and dumped at
+      // the end: the run takes minutes, and silence for minutes is
+      // indistinguishable from a hang.
+      const runs = await performCensus(store, config.projects, (p) => {
+        const state = p.failed !== null ? `FAILED — ${p.failed}` : p.truncated
+          ? `${p.prs} pull requests, TRUNCATED at the paging ceiling`
+          : `${p.prs} pull requests, ${p.reviews} review(s)`;
+        process.stdout.write(`[${p.index}/${p.total}] ${p.provider}:${p.repo} — ${state}\n`);
+      });
+      const failed = runs.filter((r) => r.failed !== null);
+      const total = runs.reduce((n, r) => n + r.prs, 0);
+      process.stdout.write(
+        `\n${total} pull requests across ${runs.length - failed.length} project(s)\n`,
+      );
+      if (failed.length > 0) throw new SilentFailure();
       return;
     }
 

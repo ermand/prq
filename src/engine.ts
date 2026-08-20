@@ -9,10 +9,11 @@
  * unreachable freezes only its own diff.
  */
 
+import type { CensusClient } from "./census";
 import { diff, type Change } from "./changes";
 import { sanitize, type Provider, type PullRequest } from "./domain";
-import { github } from "./github";
-import { gitlab } from "./gitlab";
+import { github, githubCensus } from "./github";
+import { gitlab, gitlabCensus } from "./gitlab";
 import type { ProviderClient } from "./providers";
 import type { Store, SyncRecord } from "./store";
 
@@ -195,4 +196,104 @@ export function viewersOf(byProvider: ProviderOutcome[]): string {
   return [...new Set(byProvider.filter((p) => p.viewer !== "").map((p) => p.viewer))].join(
     " · ",
   );
+}
+
+/**
+ * Census orchestration.
+ *
+ * Separate from `syncProvider` on purpose. A sync is fast, ego-scoped and
+ * destructive; a census is slow, repo-wide and accumulative, and the two must
+ * never share a code path or a table.
+ */
+
+export interface CensusProgress {
+  provider: Provider;
+  repo: string;
+  /** 1-based, over every project in the run. */
+  index: number;
+  total: number;
+  prs: number;
+  reviews: number;
+  failed: string | null;
+  truncated: boolean;
+}
+
+const CENSUS_CLIENTS: Record<Provider, CensusClient> = {
+  github: githubCensus,
+  gitlab: gitlabCensus,
+};
+
+/**
+ * Censuses every configured project, one at a time, committing each as it lands.
+ *
+ * Sequential by design. GitHub's secondary rate limits punish concurrency far
+ * harder than the primary budget this costs (55 points of 5000), and a project
+ * committed the moment it is read means an interrupted census keeps everything
+ * it already earned.
+ *
+ * `since` is deliberately not plumbed through from the CLI. `writeCensus` is a
+ * full replace scoped to one project, so a bounded walk would delete the
+ * history and write back only the recent slice — the flag would silently
+ * destroy exactly the data it appears to preserve. An incremental census needs
+ * a merging write first.
+ */
+export async function performCensus(
+  store: Store,
+  projects: Record<Provider, string[]>,
+  onProgress?: (progress: CensusProgress) => void,
+  signal?: AbortSignal,
+): Promise<CensusProgress[]> {
+  const queue = PROVIDER_ORDER.flatMap((provider) =>
+    (projects[provider] ?? []).map((repo) => ({ provider, repo })),
+  );
+  const done: CensusProgress[] = [];
+
+  for (const [i, { provider, repo }] of queue.entries()) {
+    signal?.throwIfAborted();
+    let progress: CensusProgress;
+    try {
+      const census = await CENSUS_CLIENTS[provider].censusRepo(repo, null, signal);
+      store.writeCensus(census, new Date());
+      progress = {
+        provider,
+        repo,
+        index: i + 1,
+        total: queue.length,
+        prs: census.prs.length,
+        reviews: census.reviews.length,
+        failed: census.failed,
+        truncated: census.truncated,
+      };
+    } catch (error: unknown) {
+      // One unreachable project must not abandon the rest of the run — the
+      // driver's GitLab token has expired mid-operation before.
+      if (signal?.aborted) throw error;
+      progress = {
+        provider,
+        repo,
+        index: i + 1,
+        total: queue.length,
+        prs: 0,
+        reviews: 0,
+        failed: sanitize(error instanceof Error ? error.message : String(error)),
+        truncated: false,
+      };
+      store.writeCensus(
+        {
+          provider,
+          repo,
+          prs: [],
+          reviews: [],
+          reviewPrecision: "exact",
+          failed: progress.failed,
+          truncated: false,
+        },
+        new Date(),
+      );
+    }
+    done.push(progress);
+    onProgress?.(progress);
+  }
+
+  return done;
 }

@@ -171,6 +171,76 @@ One caveat worth knowing. If a scan fails, nothing is committed — so those
 failures exist only in the sync's reply, and the banner reporting them is cleared
 by a reload. The CLI behaves the same way, having printed them once.
 
+### Filters
+
+The text box matches title, repo, author and number, so the pills next to it are
+the three things it cannot express:
+
+- **`changed`** — only rows that moved since the last sync. This is the TUI's
+  `c`, and it was the one feature the board did not have.
+- **`forge`** — taps through `gh`, then `gl`, then off.
+- **`no drafts`**
+
+All of them live in the URL alongside the grouping and the selection, so a
+filtered board is a link you can send.
+
+## The census
+
+The board answers "what needs me now". It cannot answer "how many pull requests
+does this project have" or "who works on it", and not by omission: the scan is
+`is:open` and `involves:@me`, so it has never seen a merged pull request or one
+belonging to somebody else.
+
+The census is the other axis — every pull request in every configured project,
+whatever its state and whoever opened it, kept durably:
+
+```bash
+prq census
+```
+
+Measured here: 2181 pull requests and 3565 review acts across 20 projects,
+2m21s, about 55 rate-limit points of 5000. That cost is why it is a separate
+command that you run occasionally, and never something a page load triggers.
+
+It writes its own tables. A census never touches the board's rows, and a sync
+never touches the census — one is fast, ego-scoped and destructive, the other is
+slow, repo-wide and accumulative. A project that fails is recorded as failed and
+its previous history is left alone, for the same reason a partial scan is never
+committed.
+
+### Projects
+
+`/repos` lists every censused project with its totals, and one project opens a
+page with time-to-merge (median **and** p90 — the median alone hides the tail),
+merge rate, review coverage, self-merges, monthly throughput, and its authors and
+reviewers ranked.
+
+### People
+
+`/people` is the roster, and a person opens a profile: what they wrote, per
+project, and how they review — reviews given against reviews received.
+
+Two things that page does deliberately.
+
+**One human, one profile.** The same person usually has an account per forge. Add
+them to `people:` in the config and the profile combines both; otherwise every
+login stands alone. Here, `ermand` on GitHub and `ermandduro` on GitLab measured
+659 and 156 pull requests separately, and neither number was the truth.
+
+**Bots are separated, not ranked.** `dependabot` has 126 pull requests and
+`gemini-code-assist` has 549 review acts, which would place a dependency updater
+and an AI reviewer above most of the staff. They are excluded by default and the
+roster says how many it is hiding. Detection is by name, not by behaviour:
+"reviews constantly and authors nothing" describes `gemini-code-assist`, and it
+equally describes a tech lead.
+
+### What these numbers are not
+
+They are counts of pull requests, review acts and lines. One pull request is one
+row whether it is a 4000-line generated migration or a one-line fix to a race
+condition, and neither forge records a way to tell those apart. The profile page
+says so above its own figures. Read it as a record of activity.
+
 ## The seven buckets
 
 A PR sits in exactly one, resolved first-match-wins:
@@ -227,6 +297,7 @@ affordable because the list is explicit and small.
 ## Other commands
 
 ```bash
+prq census                                 # read every project's full history
 bun run scan owner/repo [owner/repo ...]   # headless, ad-hoc, ignores the store
 bun run scan owner/repo --json             # raw
 bun src/cli.ts --state ./other.db          # use a different store for one run
@@ -251,16 +322,18 @@ OpenTUI's native core, not the application.
 | --- | --- |
 | `src/domain.ts` | the state model, and the trust boundary every remote string crosses |
 | `src/changes.ts` | pure diff between two syncs |
+| `src/census.ts` | the census contract: history rows, identity, bots |
+| `src/insights.ts` | every figure on the dashboards, pure and clock-injected |
 | `src/providers.ts` | the seam: one operation, two implementations |
-| `src/query.ts` | the GraphQL for a GitHub scan |
-| `src/github.ts` | GitHub — two searches, unioned server-side |
+| `src/query.ts` | the GraphQL for a GitHub scan and census |
+| `src/github.ts` | GitHub — two searches unioned, plus the census walk |
 | `src/gitlab.ts` | GitLab — one query, then a local involvement filter |
-| `src/store.ts` | SQLite state, per-provider baselines, migration, atomic commit |
+| `src/store.ts` | SQLite state and census, baselines, migration, atomic commit |
 | `src/render.ts` | rows, buckets and the status line, all pure |
 | `src/tui.ts` | the OpenTUI dashboard |
-| `src/engine.ts` | read the store, or sync and diff — no renderer imported |
-| `src/cli.ts` | entry point, argument parsing, `prq web` |
-| `web/` | the React dashboard: routes, components, two server functions |
+| `src/engine.ts` | read the store, sync and diff, or census — no renderer imported |
+| `src/cli.ts` | entry point, argument parsing, `prq web`, `prq census` |
+| `web/` | the React dashboard: board, projects, people |
 | `CONTEXT.md` | domain glossary — read this before changing the model |
 | `.wayfinder/` | the design map: decisions made, and what is still open |
 

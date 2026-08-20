@@ -21,10 +21,34 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { chmod, mkdir, open } from "node:fs/promises";
 import { APP_NAME } from "./config";
 import { isChangeKind, type Change, type ChangeKind } from "./changes";
-import { isClean, isPullRequest, type Provider, type PullRequest } from "./domain";
+import {
+  isCensusPr,
+  toCount,
+  toPrState,
+  type CensusPr,
+  type CensusReview,
+  type RepoCensus,
+  type ReviewAct,
+} from "./census";
+import {
+  isClean,
+  isPullRequest,
+  sanitize,
+  safeUrl,
+  type Provider,
+  type PullRequest,
+} from "./domain";
 
 /** Bumped whenever the schema or the shape of a stored PR changes. */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
+
+/**
+ * The oldest schema version whose stored `pr` payloads this build can still
+ * read. v3 only *added* tables, so a v2 database keeps its baseline and the next
+ * sync diffs against it instead of resetting — dropping it would cost the driver
+ * a change report for nothing.
+ */
+const PAYLOAD_VERSION = 2;
 
 export function storePath(env: NodeJS.ProcessEnv = process.env): string {
   const configured = env.XDG_STATE_HOME;
@@ -81,6 +105,63 @@ CREATE TABLE IF NOT EXISTS change (
   to_v    TEXT,
   PRIMARY KEY (sync_id, pr_id, kind)
 );
+
+CREATE TABLE IF NOT EXISTS census_pr (
+  provider   TEXT    NOT NULL,
+  repo       TEXT    NOT NULL,
+  number     INTEGER NOT NULL,
+  state      TEXT    NOT NULL,
+  draft      INTEGER NOT NULL,
+  title      TEXT    NOT NULL,
+  url        TEXT,
+  author     TEXT    NOT NULL,
+  created_at TEXT    NOT NULL,
+  updated_at TEXT    NOT NULL,
+  merged_at  TEXT,
+  closed_at  TEXT,
+  additions  INTEGER NOT NULL,
+  deletions  INTEGER NOT NULL,
+  files      INTEGER NOT NULL,
+  merged_by  TEXT    NOT NULL,
+  PRIMARY KEY (provider, repo, number)
+);
+
+-- Deliberately not keyed on the reviewer: one reviewer acts repeatedly on one
+-- pull request, and the sequence of acts is the interesting part. A plain rowid
+-- table keeps insertion order, which is the provider's order.
+CREATE TABLE IF NOT EXISTS census_review (
+  provider TEXT    NOT NULL,
+  repo     TEXT    NOT NULL,
+  number   INTEGER NOT NULL,
+  reviewer TEXT    NOT NULL,
+  act      TEXT    NOT NULL,
+  at       TEXT
+);
+
+-- One row per project, overwritten each census: when it last ran, and whether
+-- what it wrote was whole.
+CREATE TABLE IF NOT EXISTS census_run (
+  provider  TEXT    NOT NULL,
+  repo      TEXT    NOT NULL,
+  at        TEXT    NOT NULL,
+  prs       INTEGER NOT NULL,
+  reviews   INTEGER NOT NULL,
+  failed    TEXT,
+  truncated INTEGER NOT NULL,
+  PRIMARY KEY (provider, repo)
+);
+
+-- Derived, never authoritative: recomputed from the census tables after every
+-- successful replace, so it can never drift from the rows it summarises.
+CREATE TABLE IF NOT EXISTS contributor (
+  provider   TEXT    NOT NULL,
+  username   TEXT    NOT NULL,
+  first_seen TEXT    NOT NULL,
+  last_seen  TEXT    NOT NULL,
+  prs        INTEGER NOT NULL,
+  reviews    INTEGER NOT NULL,
+  PRIMARY KEY (provider, username)
+);
 `;
 
 /**
@@ -91,6 +172,10 @@ const INDEXES = `
 CREATE INDEX IF NOT EXISTS sync_by_provider ON sync(provider, id);
 CREATE INDEX IF NOT EXISTS pr_by_provider ON pr(provider);
 CREATE INDEX IF NOT EXISTS change_by_sync ON change(sync_id);
+CREATE INDEX IF NOT EXISTS census_pr_by_author ON census_pr(provider, author);
+CREATE INDEX IF NOT EXISTS census_pr_by_state ON census_pr(provider, repo, state);
+CREATE INDEX IF NOT EXISTS census_review_by_pr ON census_review(provider, repo, number);
+CREATE INDEX IF NOT EXISTS census_review_by_reviewer ON census_review(provider, reviewer);
 `;
 
 export interface SyncRecord {
@@ -132,6 +217,161 @@ interface SyncRow {
   pr_count: number;
   baseline_reset: number;
 }
+
+/** One census operation, as `census_run` remembers it. */
+export interface CensusRun {
+  provider: Provider;
+  repo: string;
+  at: Date;
+  prs: number;
+  reviews: number;
+  /** Set when the project could not be read. Stored rows are then the old ones. */
+  failed: string | null;
+  /** True when paging hit its ceiling, so the stored rows are a prefix. */
+  truncated: boolean;
+}
+
+/**
+ * One forge identity, derived from the census tables.
+ *
+ * Per-provider, not per-person: merging identities across forges is a config
+ * question (`people:`), and answering it here would bake one build's rules into
+ * the file.
+ */
+export interface Contributor {
+  provider: Provider;
+  username: string;
+  firstSeen: string;
+  lastSeen: string;
+  prs: number;
+  reviews: number;
+}
+
+interface CensusPrRow {
+  provider: string;
+  repo: string;
+  number: number;
+  state: string;
+  draft: number;
+  title: string;
+  url: string | null;
+  author: string;
+  created_at: string;
+  updated_at: string;
+  merged_at: string | null;
+  closed_at: string | null;
+  additions: number;
+  deletions: number;
+  files: number;
+  merged_by: string;
+}
+
+interface CensusReviewRow {
+  provider: string;
+  repo: string;
+  number: number;
+  reviewer: string;
+  act: string;
+  at: string | null;
+}
+
+interface CensusRunRow {
+  provider: string;
+  repo: string;
+  at: string;
+  prs: number;
+  reviews: number;
+  failed: string | null;
+  truncated: number;
+}
+
+interface ContributorRow {
+  provider: string;
+  username: string;
+  first_seen: string;
+  last_seen: string;
+  prs: number;
+  reviews: number;
+}
+
+/**
+ * Any stored string, on the way out.
+ *
+ * SQLite is dynamically typed, so a NOT NULL TEXT column still hands back a blob
+ * if something wrote one — and every field these guard reaches a terminal or an
+ * OSC 8 escape. The file is on disk and therefore untrusted, exactly as
+ * `storedPrs` already assumes.
+ */
+const text = (raw: unknown): string => (typeof raw === "string" ? sanitize(raw) : "");
+
+const stamp = (raw: unknown): string | null =>
+  typeof raw === "string" && raw !== "" ? sanitize(raw) : null;
+
+const isProvider = (raw: unknown): raw is Provider => raw === "github" || raw === "gitlab";
+
+/**
+ * Stored acts are the domain spelling (`changes-requested`), not the provider's
+ * (`CHANGES_REQUESTED`), so `toReviewAct` is the wrong direction here.
+ */
+const isAct = (raw: unknown): raw is ReviewAct =>
+  raw === "approved" ||
+  raw === "changes-requested" ||
+  raw === "commented" ||
+  raw === "dismissed";
+
+/**
+ * An optional-equality WHERE clause. Column names are literals from the call
+ * sites below, never caller input; only the values are ever bound.
+ */
+function clauses(
+  fields: [column: string, value: string | undefined][],
+): { where: string; args: string[] } {
+  const parts: string[] = [];
+  const args: string[] = [];
+  for (const [column, value] of fields) {
+    if (value === undefined) continue;
+    parts.push(`${column} = ?`);
+    args.push(value);
+  }
+  return { where: parts.length === 0 ? "" : ` WHERE ${parts.join(" AND ")}`, args };
+}
+
+/**
+ * Rebuilds `contributor` from the census tables.
+ *
+ * One statement over a union of observations rather than a pass in TypeScript:
+ * the largest configured repo alone holds 3309 pull requests, and identities span
+ * repos, so a partial recompute would need every repo's rows in memory anyway.
+ *
+ * A review act bounds the identity's window by its own timestamp where it has
+ * one, and otherwise by the reviewed pull request's — GitLab's `approvedBy`
+ * carries no time, and the pull request it sits on is the tightest bound left.
+ */
+const RECOMPUTE_CONTRIBUTORS = `
+INSERT INTO contributor (provider, username, first_seen, last_seen, prs, reviews)
+SELECT provider,
+       username,
+       coalesce(min(low), ''),
+       coalesce(max(high), ''),
+       sum(is_pr),
+       sum(is_review)
+  FROM (
+       SELECT provider, author AS username, created_at AS low, updated_at AS high,
+              1 AS is_pr, 0 AS is_review
+         FROM census_pr
+        WHERE author <> ''
+       UNION ALL
+       SELECT r.provider, r.reviewer AS username,
+              coalesce(r.at, p.created_at) AS low,
+              coalesce(r.at, p.updated_at) AS high,
+              0 AS is_pr, 1 AS is_review
+         FROM census_review r
+         LEFT JOIN census_pr p
+           ON p.provider = r.provider AND p.repo = r.repo AND p.number = r.number
+        WHERE r.reviewer <> ''
+       )
+ GROUP BY provider, username
+`;
 
 export class Store {
   private constructor(private readonly db: Database) {}
@@ -232,7 +472,10 @@ export class Store {
 
     this.db.run(INDEXES);
 
-    if (!fresh && version !== SCHEMA_VERSION) {
+    // Scoped to versions whose payload shape this build cannot read, not to any
+    // version move: v3 added tables and left the payload alone, so a v2 baseline
+    // is still diffable and dropping it would cost a change report for nothing.
+    if (!fresh && version < PAYLOAD_VERSION) {
       this.db.run("DELETE FROM pr");
     }
     // Only written when it differs: an unconditional header write takes the
@@ -438,6 +681,202 @@ export class Store {
       prCount: input.prs.length,
       baselineReset: input.baselineReset,
     };
+  }
+
+  /**
+   * Replaces one project's census in a single transaction.
+   *
+   * A full replace scoped to `(provider, repo)` rather than an upsert: a pull
+   * request the walk no longer sees — squashed history, a transferred repo — would
+   * otherwise sit in the dashboard forever. Another project's rows are never
+   * touched, so one failing repo cannot cost the others their history.
+   */
+  writeCensus(census: RepoCensus, at: Date): void {
+    const run = this.db.transaction(() => {
+      this.db
+        .query(
+          "INSERT OR REPLACE INTO census_run (provider, repo, at, prs, reviews, failed, truncated) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .run(
+          census.provider,
+          census.repo,
+          at.toISOString(),
+          census.prs.length,
+          census.reviews.length,
+          census.failed,
+          census.truncated ? 1 : 0,
+        );
+
+      // A failure records the attempt and stops. Replacing good history with a
+      // partial read is the same mistake `commit` refuses to make for a partial
+      // scan: the hole would be inherited by every later reading of the repo.
+      if (census.failed !== null) return;
+
+      this.db
+        .query("DELETE FROM census_pr WHERE provider = ? AND repo = ?")
+        .run(census.provider, census.repo);
+      this.db
+        .query("DELETE FROM census_review WHERE provider = ? AND repo = ?")
+        .run(census.provider, census.repo);
+
+      // Prepared once and reused: 3309 rows land in one call, and a fresh
+      // prepare per row is the whole cost at that size.
+      const insertPr = this.db.query(
+        "INSERT INTO census_pr (provider, repo, number, state, draft, title, url, author, created_at, updated_at, merged_at, closed_at, additions, deletions, files, merged_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      );
+      for (const pr of census.prs) {
+        insertPr.run(
+          pr.provider,
+          pr.repo,
+          pr.number,
+          pr.state,
+          pr.draft ? 1 : 0,
+          pr.title,
+          pr.url,
+          pr.author,
+          pr.createdAt,
+          pr.updatedAt,
+          pr.mergedAt,
+          pr.closedAt,
+          pr.additions,
+          pr.deletions,
+          pr.files,
+          pr.mergedBy,
+        );
+      }
+
+      const insertReview = this.db.query(
+        "INSERT INTO census_review (provider, repo, number, reviewer, act, at) VALUES (?, ?, ?, ?, ?, ?)",
+      );
+      for (const review of census.reviews) {
+        insertReview.run(
+          review.provider,
+          review.repo,
+          review.number,
+          review.reviewer,
+          review.act,
+          review.at,
+        );
+      }
+
+      this.db.run("DELETE FROM contributor");
+      this.db.run(RECOMPUTE_CONTRIBUTORS);
+    });
+    run();
+  }
+
+  /**
+   * Census rows, ordered by project and number.
+   *
+   * Rows that cannot be a `CensusPr` are dropped rather than repaired: the same
+   * rule `storedPrs` follows, for the same reason — a stored `url` reaches both a
+   * spawned `open` and an OSC 8 escape sequence.
+   */
+  censusPrs(
+    filter: { provider?: Provider; repo?: string; author?: string } = {},
+  ): CensusPr[] {
+    const { where, args } = clauses([
+      ["provider", filter.provider],
+      ["repo", filter.repo],
+      ["author", filter.author],
+    ]);
+    return this.db
+      .query<
+        CensusPrRow,
+        string[]
+      >(`SELECT * FROM census_pr${where} ORDER BY provider, repo, number`)
+      .all(...args)
+      .map((row) => ({
+        provider: row.provider as Provider,
+        repo: text(row.repo),
+        number: row.number,
+        state: toPrState(row.state),
+        draft: row.draft === 1,
+        title: text(row.title),
+        url: safeUrl(row.url),
+        author: text(row.author),
+        createdAt: text(row.created_at),
+        updatedAt: text(row.updated_at),
+        mergedAt: stamp(row.merged_at),
+        closedAt: stamp(row.closed_at),
+        additions: toCount(row.additions),
+        deletions: toCount(row.deletions),
+        files: toCount(row.files),
+        mergedBy: text(row.merged_by),
+      }))
+      .filter(isCensusPr);
+  }
+
+  /** Review acts, in the order the provider reported them. */
+  censusReviews(
+    filter: { provider?: Provider; repo?: string; reviewer?: string } = {},
+  ): CensusReview[] {
+    const { where, args } = clauses([
+      ["provider", filter.provider],
+      ["repo", filter.repo],
+      ["reviewer", filter.reviewer],
+    ]);
+    return this.db
+      .query<CensusReviewRow, string[]>(`SELECT * FROM census_review${where} ORDER BY rowid`)
+      .all(...args)
+      .flatMap((row) =>
+        isProvider(row.provider) && isAct(row.act) && typeof row.number === "number"
+          ? [
+              {
+                provider: row.provider,
+                repo: text(row.repo),
+                number: row.number,
+                reviewer: text(row.reviewer),
+                act: row.act,
+                at: stamp(row.at),
+              },
+            ]
+          : [],
+      );
+  }
+
+  /** When each project was last censused, and whether the result was whole. */
+  censusRuns(): CensusRun[] {
+    return this.db
+      .query<CensusRunRow, []>("SELECT * FROM census_run ORDER BY provider, repo")
+      .all()
+      .flatMap((row) => {
+        const at = new Date(text(row.at));
+        // An unreadable timestamp would reach `toISOString` in the header and
+        // throw there instead of here.
+        if (!isProvider(row.provider) || Number.isNaN(at.getTime())) return [];
+        return [
+          {
+            provider: row.provider,
+            repo: text(row.repo),
+            at,
+            prs: toCount(row.prs),
+            reviews: toCount(row.reviews),
+            failed: row.failed === null ? null : text(row.failed),
+            truncated: row.truncated === 1,
+          },
+        ];
+      });
+  }
+
+  contributors(): Contributor[] {
+    return this.db
+      .query<ContributorRow, []>("SELECT * FROM contributor ORDER BY provider, username")
+      .all()
+      .flatMap((row) =>
+        isProvider(row.provider)
+          ? [
+              {
+                provider: row.provider,
+                username: text(row.username),
+                firstSeen: text(row.first_seen),
+                lastSeen: text(row.last_seen),
+                prs: toCount(row.prs),
+                reviews: toCount(row.reviews),
+              },
+            ]
+          : [],
+      );
   }
 
   /** Syncs recorded, optionally for one provider. For diagnostics and tests. */

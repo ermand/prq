@@ -16,15 +16,42 @@ import { flatten, groupIntoBuckets } from "../../../src/domain";
 import { matchesFilter, relativeAge } from "../../../src/render";
 import { Detail } from "../components/detail";
 import { Row } from "../components/row";
-import { BUCKET_TONE } from "../components/ui";
+import { BUCKET_TONE, Pill } from "../components/ui";
 import { getBoard, runSync } from "../server/board";
 
+/**
+ * Every parameter is optional, and the annotation below is what makes that true
+ * for the type system too. Inferred, the validator's return has *required* keys
+ * holding `undefined`, which forces every `Link` in the app — including the nav
+ * bar, which knows nothing about the board — to restate all six.
+ */
+export interface BoardSearch {
+  q?: string;
+  flat?: boolean;
+  pr?: string;
+  changed?: boolean;
+  prov?: "github" | "gitlab";
+  nodraft?: boolean;
+}
+
 export const Route = createFileRoute("/")({
-  validateSearch: (search: Record<string, unknown>) => ({
+  validateSearch: (search: Record<string, unknown>): BoardSearch => ({
     q: typeof search.q === "string" && search.q !== "" ? search.q : undefined,
     // Absent means grouped, because grouping by relevance is the whole point.
     flat: search.flat === true || search.flat === "true" ? true : undefined,
     pr: typeof search.pr === "string" ? search.pr : undefined,
+    /**
+     * The three filters the text box provably cannot express. `q` already
+     * matches title, repo, author and number, so anything textual would be
+     * duplicate machinery; these are structural.
+     *
+     * `changed` is the TUI's `c` key, which the board never had — the one
+     * genuine feature gap between the two front-ends.
+     */
+    changed: search.changed === true || search.changed === "true" ? true : undefined,
+    prov:
+      search.prov === "github" || search.prov === "gitlab" ? search.prov : undefined,
+    nodraft: search.nodraft === true || search.nodraft === "true" ? true : undefined,
   }),
   loader: () => getBoard(),
   component: Board,
@@ -32,7 +59,7 @@ export const Route = createFileRoute("/")({
 
 function Board() {
   const board = Route.useLoaderData();
-  const { q, flat, pr: selectedId } = Route.useSearch();
+  const { q, flat, pr: selectedId, changed, prov, nodraft } = Route.useSearch();
   const navigate = Route.useNavigate();
   const router = useRouter();
 
@@ -50,8 +77,24 @@ function Board() {
   const now = new Date(board.now);
   const changesByPr = byPr(board.changes);
   const filter = q ?? "";
-  const visible = board.prs.filter((pr) => matchesFilter(pr, filter));
+  const visible = board.prs.filter(
+    (pr) =>
+      matchesFilter(pr, filter) &&
+      (prov === undefined || pr.provider === prov) &&
+      (nodraft !== true || !pr.draft) &&
+      // A change entry keyed to this row is what "changed" means; a `left` change
+      // has no row to match, which is why departures stay in the header.
+      (changed !== true || (changesByPr.get(pr.id)?.length ?? 0) > 0),
+  );
   const selected = board.prs.find((pr) => pr.id === selectedId) ?? null;
+
+  /**
+   * Every link below spreads this. The router requires a **total** search
+   * object, so an earlier attempt to spread `prev` typechecked as optional keys
+   * and silently dropped filters; naming all six once is what keeps the
+   * compiler able to catch a forgotten one.
+   */
+  const search = { q, flat, pr: selectedId, changed, prov, nodraft };
 
   // A PR that has left the set has no row to mark, so the count would otherwise
   // be the only trace of it. `left` carries the repo and nothing more, because
@@ -77,9 +120,8 @@ function Board() {
   const failures = [...new Set([...board.failures, ...scanFailures])];
 
   return (
-    <div className="flex h-screen flex-col">
+    <div className="flex min-h-0 flex-1 flex-col">
       <header className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-zinc-800 bg-zinc-900/50 px-4 py-2.5">
-        <h1 className="font-mono text-sm font-semibold text-zinc-100">prq</h1>
 
         <span className="text-xs text-zinc-500">
           {board.viewer === "" ? "not synced" : board.viewer}
@@ -100,11 +142,7 @@ function Board() {
             aria-label="Filter pull requests"
             onChange={(e) =>
               navigate({
-                search: (prev) => ({
-                  q: e.target.value || undefined,
-                  flat: prev.flat,
-                  pr: prev.pr,
-                }),
+                search: { ...search, q: e.target.value || undefined },
                 replace: true,
                 resetScroll: false,
               })
@@ -114,15 +152,45 @@ function Board() {
 
           <Link
             to="/"
-            search={(prev) => ({
-              q: prev.q,
-              flat: flat ? undefined : true,
-              pr: prev.pr,
-            })}
+            search={{ ...search, changed: changed ? undefined : true }}
             resetScroll={false}
-            className="rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-300 hover:border-zinc-500 hover:text-zinc-100"
+            title="Only rows that moved since the last sync — the TUI's `c`"
           >
-            {flat ? "group" : "flat"}
+            <Pill active={changed === true}>changed</Pill>
+          </Link>
+
+          {/* Cycles rather than offering three controls: with two forges a single
+              tap-through is fewer pixels and fewer decisions. */}
+          <Link
+            to="/"
+            search={{
+              ...search,
+              prov:
+                prov === undefined ? "github" : prov === "github" ? "gitlab" : undefined,
+            }}
+            resetScroll={false}
+            title="Filter by forge"
+          >
+            <Pill active={prov !== undefined}>
+              {prov === undefined ? "forge" : prov === "github" ? "gh" : "gl"}
+            </Pill>
+          </Link>
+
+          <Link
+            to="/"
+            search={{ ...search, nodraft: nodraft ? undefined : true }}
+            resetScroll={false}
+            title="Hide drafts"
+          >
+            <Pill active={nodraft === true}>no drafts</Pill>
+          </Link>
+
+          <Link
+            to="/"
+            search={{ ...search, flat: flat ? undefined : true }}
+            resetScroll={false}
+          >
+            <Pill active={flat === true}>{flat ? "group" : "flat"}</Pill>
           </Link>
 
           <button

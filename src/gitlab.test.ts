@@ -3,6 +3,7 @@ import {
   needsRefresh,
   concernsViewer,
   gitlab,
+  gitlabCensus,
   normalizeMergeRequest,
   stacksOf,
   staleBlockOf,
@@ -11,10 +12,13 @@ import {
   toMergeStateFromStatus,
   verdictOf,
 } from "./gitlab";
+import { MAX_PAGES } from "./census";
 
 const realFetch = globalThis.fetch;
+const realSpawn = Bun.spawn;
 afterEach(() => {
   globalThis.fetch = realFetch;
+  Bun.spawn = realSpawn;
   delete process.env.GITLAB_TOKEN;
 });
 
@@ -635,5 +639,412 @@ describe("token freshness", () => {
     // Cannot be shown to be live, and the cost of guessing wrong is a bare 401.
     expect(needsRefresh("true", "", now)).toBe(true);
     expect(needsRefresh("true", "not-a-date", now)).toBe(true);
+  });
+});
+
+/** One census node as the live API returns it: string `iid`, lowercase `state`. */
+function censusNode(over: Record<string, unknown> = {}) {
+  return {
+    iid: "1",
+    title: "feat: something",
+    webUrl: "https://gitlab.com/g/s/p/-/merge_requests/1",
+    state: "opened",
+    draft: false,
+    createdAt: "2026-06-01T00:00:00Z",
+    updatedAt: "2026-06-02T00:00:00Z",
+    mergedAt: null,
+    closedAt: null,
+    author: { username: "alice" },
+    mergeUser: null,
+    diffStatsSummary: { additions: 3, deletions: 1, fileCount: 2 },
+    approvedBy: { nodes: [] },
+    reviewers: { nodes: [] },
+    ...over,
+  };
+}
+
+interface CensusPage {
+  nodes: unknown[];
+  hasNextPage?: boolean;
+  endCursor?: string | null;
+}
+
+/**
+ * Serves census pages in order and records the variables each request bound. The
+ * last page repeats once the list is exhausted, which is what an unbounded cursor
+ * looks like — the condition `MAX_PAGES` exists to stop.
+ */
+function serveCensus(pages: CensusPage[]) {
+  const seen: Array<{ path: unknown; after: unknown; authorization: unknown }> = [];
+  globalThis.fetch = (async (
+    _url: unknown,
+    init: { body: string; headers: Record<string, string> },
+  ) => {
+    const { variables } = JSON.parse(init.body) as {
+      variables: { path: unknown; after: unknown };
+    };
+    seen.push({
+      path: variables.path,
+      after: variables.after,
+      authorization: init.headers.authorization,
+    });
+    const page = pages[Math.min(seen.length - 1, pages.length - 1)]!;
+    return new Response(
+      JSON.stringify({
+        data: {
+          project: {
+            mergeRequests: {
+              count: page.nodes.length,
+              pageInfo: {
+                hasNextPage: page.hasNextPage ?? false,
+                endCursor: page.endCursor === undefined ? `cursor-${seen.length}` : page.endCursor,
+              },
+              nodes: page.nodes,
+            },
+          },
+        },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  }) as unknown as typeof fetch;
+  return seen;
+}
+
+function serveBody(body: unknown) {
+  globalThis.fetch = (async () =>
+    new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    })) as unknown as typeof fetch;
+}
+
+describe("the census walk", () => {
+  test("stitches the pages a cursor hands back", async () => {
+    process.env.GITLAB_TOKEN = "t";
+    const seen = serveCensus([
+      { nodes: [censusNode({ iid: "5" }), censusNode({ iid: "4" })], hasNextPage: true, endCursor: "cur1" },
+      { nodes: [censusNode({ iid: "3" })] },
+    ]);
+
+    const census = await gitlabCensus.censusRepo("g/s/p", null);
+
+    expect(census.prs.map((p) => p.number)).toEqual([5, 4, 3]);
+    expect(census.failed).toBeNull();
+    expect(census.truncated).toBe(false);
+    // The path is bound as a variable, never interpolated into the document.
+    expect(seen.map((r) => r.path)).toEqual(["g/s/p", "g/s/p"]);
+    // First page unanchored, second anchored on the cursor the first returned.
+    expect(seen.map((r) => r.after)).toEqual([null, "cur1"]);
+  });
+
+  test("stops when the cursor stops, not when the count runs out", async () => {
+    // `hasNextPage` true with no cursor is nowhere to go: following it would
+    // re-request page one until MAX_PAGES.
+    process.env.GITLAB_TOKEN = "t";
+    const seen = serveCensus([{ nodes: [censusNode()], hasNextPage: true, endCursor: null }]);
+    const census = await gitlabCensus.censusRepo("g/s/p", null);
+    expect(seen).toHaveLength(1);
+    expect(census.prs).toHaveLength(1);
+  });
+
+  test("reports a prefix as truncated rather than as the whole history", async () => {
+    process.env.GITLAB_TOKEN = "t";
+    // Every page claims another, with a fresh cursor each time — a runaway walk.
+    const seen = serveCensus([{ nodes: [censusNode()], hasNextPage: true }]);
+
+    const census = await gitlabCensus.censusRepo("g/s/p", null);
+
+    expect(seen).toHaveLength(MAX_PAGES);
+    expect(census.prs).toHaveLength(MAX_PAGES);
+    expect(census.truncated).toBe(true);
+    // Truncated is not failed: the rows it did read are real.
+    expect(census.failed).toBeNull();
+  });
+
+  test("a watermark ends the walk at the first row the caller already holds", async () => {
+    process.env.GITLAB_TOKEN = "t";
+    const seen = serveCensus([
+      {
+        nodes: [
+          censusNode({ iid: "3", createdAt: "2026-06-03T00:00:00Z" }),
+          censusNode({ iid: "2", createdAt: "2026-06-02T00:00:00Z" }),
+          censusNode({ iid: "1", createdAt: "2026-05-01T00:00:00Z" }),
+        ],
+        hasNextPage: true,
+      },
+    ]);
+
+    const census = await gitlabCensus.censusRepo("g/s/p", "2026-06-02T00:00:00Z");
+
+    expect(census.prs.map((p) => p.number)).toEqual([3]);
+    // And it did not ask for the page after the one it stopped inside.
+    expect(seen).toHaveLength(1);
+  });
+
+  test("an offset-bearing watermark compares as the same instant", async () => {
+    // Both sides are canonicalised before the string compare. Without that,
+    // `2026-06-02T02:00:00+02:00` sorts after `2026-06-03T00:00:00Z`.
+    process.env.GITLAB_TOKEN = "t";
+    serveCensus([
+      {
+        nodes: [
+          censusNode({ iid: "3", createdAt: "2026-06-03T00:00:00Z" }),
+          censusNode({ iid: "2", createdAt: "2026-06-02T00:00:00Z" }),
+        ],
+        hasNextPage: true,
+      },
+    ]);
+
+    const census = await gitlabCensus.censusRepo("g/s/p", "2026-06-02T02:00:00+02:00");
+    expect(census.prs.map((p) => p.number)).toEqual([3]);
+  });
+
+  test("a cancelled census rejects instead of blaming the project", async () => {
+    process.env.GITLAB_TOKEN = "t";
+    const seen = serveCensus([{ nodes: [censusNode()] }]);
+    await expect(
+      gitlabCensus.censusRepo("g/s/p", null, AbortSignal.abort()),
+    ).rejects.toThrow();
+    expect(seen).toHaveLength(0);
+  });
+});
+
+describe("a project the census cannot read", () => {
+  test("a null project is a failure with no rows, not an empty history", async () => {
+    // HTTP 200, no `errors`, `project: null` — verified live against a typo path.
+    process.env.GITLAB_TOKEN = "t";
+    serveBody({ data: { project: null } });
+
+    const census = await gitlabCensus.censusRepo("g/s/typo", null);
+
+    expect(census.failed).toInclude("g/s/typo");
+    expect(census.failed).toInclude("unreachable");
+    expect(census.prs).toEqual([]);
+    expect(census.reviews).toEqual([]);
+    expect(census.truncated).toBe(false);
+  });
+
+  test("a GraphQL error is reported, never thrown at the caller", async () => {
+    // One unreadable project must not abort a census over the others.
+    process.env.GITLAB_TOKEN = "t";
+    serveBody({ errors: [{ message: "boom", extensions: { code: "FORBIDDEN" } }] });
+
+    const census = await gitlabCensus.censusRepo("g/s/p", null);
+    expect(census.failed).toInclude("FORBIDDEN");
+    expect(census.prs).toEqual([]);
+  });
+
+  test("the token never reaches the failure text", async () => {
+    // GitLab echoes request fragments on some rejections, and a census failure is
+    // printed. The exact secret is replaced, whatever shape it has.
+    process.env.GITLAB_TOKEN = "glpat-supersecret";
+    serveBody({ errors: [{ message: "invalid token glpat-supersecret" }] });
+
+    const census = await gitlabCensus.censusRepo("g/s/p", null);
+    expect(census.failed).not.toBeNull();
+    expect(census.failed).not.toInclude("glpat-supersecret");
+    expect(census.failed).toInclude("***");
+  });
+});
+
+describe("a censused merge request", () => {
+  test("carries the iid as a number and the state in the taxonomy", async () => {
+    process.env.GITLAB_TOKEN = "t";
+    serveCensus([
+      {
+        nodes: [
+          censusNode({ iid: "329", state: "opened" }),
+          censusNode({
+            iid: "328",
+            state: "merged",
+            mergedAt: "2026-07-29T13:58:43Z",
+            mergeUser: { username: "bob" },
+          }),
+          censusNode({
+            iid: "320",
+            state: "closed",
+            closedAt: "2026-04-22T12:38:14Z",
+            updatedAt: "2026-05-01T00:00:00Z",
+          }),
+          censusNode({ iid: "300", state: "locked", updatedAt: "2026-05-02T00:00:00Z" }),
+        ],
+      },
+    ]);
+
+    const census = await gitlabCensus.censusRepo("g/s/p", null);
+    const [open, merged, closed, locked] = census.prs;
+
+    // `iid` arrives as a string; a numeric field that stayed a string would break
+    // every keyed lookup downstream.
+    expect(open?.number).toBe(329);
+    expect(open?.state).toBe("open");
+    expect(open?.mergedAt).toBeNull();
+    expect(open?.closedAt).toBeNull();
+
+    expect(merged?.state).toBe("merged");
+    expect(merged?.mergedAt).toBe("2026-07-29T13:58:43.000Z");
+    expect(merged?.mergedBy).toBe("bob");
+
+    // The selected `closedAt` wins over the later `updatedAt`, which drifts every
+    // time somebody comments on a closed MR.
+    expect(closed?.state).toBe("closed");
+    expect(closed?.closedAt).toBe("2026-04-22T12:38:14.000Z");
+
+    // `locked` folds into closed, and carries no closing date of its own.
+    expect(locked?.state).toBe("closed");
+    expect(locked?.closedAt).toBe("2026-05-02T00:00:00.000Z");
+
+    // Merge authorship is only meaningful on a merged MR.
+    expect(open?.mergedBy).toBe("");
+  });
+
+  test("a malformed iid cannot poison a numeric field", async () => {
+    process.env.GITLAB_TOKEN = "t";
+    serveCensus([{ nodes: [censusNode({ iid: "not-a-number" })] }]);
+    expect((await gitlabCensus.censusRepo("g/s/p", null)).prs[0]?.number).toBe(0);
+  });
+
+  test("a hidden author and an uncomputed diff read as empty, not as holes", async () => {
+    process.env.GITLAB_TOKEN = "t";
+    serveCensus([{ nodes: [censusNode({ author: null, diffStatsSummary: null })] }]);
+    const row = (await gitlabCensus.censusRepo("g/s/p", null)).prs[0];
+    expect(row?.author).toBe("");
+    expect(row?.additions).toBe(0);
+    expect(row?.files).toBe(0);
+  });
+});
+
+describe("census review acts", () => {
+  test("an approval recorded twice is one act", async () => {
+    // `approvedBy` and a reviewer's APPROVED `reviewState` describe the same act.
+    process.env.GITLAB_TOKEN = "t";
+    serveCensus([
+      {
+        nodes: [
+          censusNode({
+            iid: "7",
+            approvedBy: { nodes: [{ username: "alice" }] },
+            reviewers: {
+              nodes: [
+                { username: "alice", mergeRequestInteraction: { reviewState: "APPROVED" } },
+                { username: "bob", mergeRequestInteraction: { reviewState: "REQUESTED_CHANGES" } },
+                { username: "carol", mergeRequestInteraction: { reviewState: "UNREVIEWED" } },
+                { username: "dave", mergeRequestInteraction: null },
+              ],
+            },
+          }),
+        ],
+      },
+    ]);
+
+    const { reviews } = await gitlabCensus.censusRepo("g/s/p", null);
+
+    expect(reviews.map((r) => `${r.reviewer}:${r.act}`)).toEqual([
+      "alice:approved",
+      "bob:changes-requested",
+    ]);
+    // Every row belongs to the MR it came from.
+    expect(reviews.every((r) => r.number === 7 && r.repo === "g/s/p")).toBe(true);
+  });
+
+  test("two different acts by one reviewer are two rows", async () => {
+    // A withdrawn-then-blocked reviewer holds both; only the identical pair merges.
+    process.env.GITLAB_TOKEN = "t";
+    serveCensus([
+      {
+        nodes: [
+          censusNode({
+            approvedBy: { nodes: [{ username: "alice" }] },
+            reviewers: {
+              nodes: [
+                { username: "alice", mergeRequestInteraction: { reviewState: "REQUESTED_CHANGES" } },
+              ],
+            },
+          }),
+        ],
+      },
+    ]);
+
+    expect(
+      (await gitlabCensus.censusRepo("g/s/p", null)).reviews.map((r) => r.act),
+    ).toEqual(["approved", "changes-requested"]);
+  });
+
+  test("no review carries a time, and the census says so", async () => {
+    // GitLab attaches no timestamp to either source, so latency is unknowable
+    // rather than zero — a fabricated `at` would read as an instant review.
+    process.env.GITLAB_TOKEN = "t";
+    serveCensus([
+      {
+        nodes: [
+          censusNode({
+            approvedBy: { nodes: [{ username: "alice" }] },
+            reviewers: {
+              nodes: [{ username: "bob", mergeRequestInteraction: { reviewState: "REVIEWED" } }],
+            },
+          }),
+        ],
+      },
+    ]);
+
+    const census = await gitlabCensus.censusRepo("g/s/p", null);
+    expect(census.reviews).toHaveLength(2);
+    expect(census.reviews.every((r) => r.at === null)).toBe(true);
+    expect(census.reviewPrecision).toBe("approximate");
+  });
+});
+
+describe("a census under a lapsing OAuth token", () => {
+  test("refreshes through glab before the first page", async () => {
+    // A census is several pages; a two-hour OAuth token that lapses mid-walk
+    // abandons a multi-minute walk with a bare 401.
+    delete process.env.GITLAB_TOKEN;
+    const calls: string[][] = [];
+    const stored: Record<string, string> = {
+      is_oauth2: "true",
+      // Fixed and firmly past, so the decision needs no clock control.
+      oauth2_expiry_date: "2020-01-01T00:00:00Z",
+      token: "glpat-fresh",
+    };
+    Bun.spawn = ((cmd: string[]) => {
+      calls.push(cmd);
+      const answer = cmd[1] === "config" ? (stored[cmd[3] ?? ""] ?? "") : "";
+      return {
+        stdout: new Blob([answer]).stream(),
+        stderr: new Blob([""]).stream(),
+        exited: Promise.resolve(0),
+      };
+    }) as unknown as typeof Bun.spawn;
+
+    const seen = serveCensus([{ nodes: [censusNode()] }]);
+    const census = await gitlabCensus.censusRepo("g/s/p", null);
+
+    // `glab api /user` is the call that makes glab refresh and write back.
+    const refreshed = calls.findIndex((c) => c[1] === "api" && c[2] === "/user");
+    expect(refreshed).toBeGreaterThanOrEqual(0);
+    // ...and it happened before the token was read, so before the walk.
+    expect(calls.findIndex((c) => c[3] === "token")).toBeGreaterThan(refreshed);
+    expect(seen[0]?.authorization).toBe("Bearer glpat-fresh");
+    expect(census.failed).toBeNull();
+  });
+
+  test("a personal access token is read without a refresh round trip", async () => {
+    delete process.env.GITLAB_TOKEN;
+    const calls: string[][] = [];
+    Bun.spawn = ((cmd: string[]) => {
+      calls.push(cmd);
+      const answer = cmd[3] === "token" ? "glpat-stored" : "false";
+      return {
+        stdout: new Blob([answer]).stream(),
+        stderr: new Blob([""]).stream(),
+        exited: Promise.resolve(0),
+      };
+    }) as unknown as typeof Bun.spawn;
+
+    const seen = serveCensus([{ nodes: [censusNode()] }]);
+    await gitlabCensus.censusRepo("g/s/p", null);
+
+    expect(calls.some((c) => c[1] === "api")).toBe(false);
+    expect(seen[0]?.authorization).toBe("Bearer glpat-stored");
   });
 });

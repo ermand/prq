@@ -7,8 +7,36 @@
  * per-field `errors[]` array.
  */
 
-import { normalize, sanitize, type PullRequest, type RawPullRequest } from "./domain";
-import { buildSearchQuery, SCAN_FILTERS, SCAN_QUERY, type ScanFilter } from "./query";
+import {
+  canonicalTime,
+  normalize,
+  safeUrl,
+  sanitize,
+  type PullRequest,
+  type RawPullRequest,
+} from "./domain";
+import {
+  MAX_PAGES as CENSUS_MAX_PAGES,
+  PAGE_SIZE as CENSUS_PAGE_SIZE,
+  toCount,
+  toLogin,
+  toPrState,
+  toReviewAct,
+  toTime,
+  type CensusClient,
+  type CensusPr,
+  type CensusReview,
+  type RepoCensus,
+} from "./census";
+import {
+  buildSearchQuery,
+  CENSUS_QUERY,
+  isValidRepo,
+  SCAN_FILTERS,
+  SCAN_QUERY,
+  splitRepo,
+  type ScanFilter,
+} from "./query";
 import type { ProviderClient, ProviderScan } from "./providers";
 
 const ENDPOINT = "https://api.github.com/graphql";
@@ -60,11 +88,16 @@ export async function githubToken(): Promise<string> {
   return token;
 }
 
-async function post(
+/**
+ * The one HTTP path to GitHub. Both the scan and the census go through it, so
+ * the two failure shapes below are handled in exactly one place.
+ */
+async function post<T>(
   token: string,
-  variables: { q: string; first: number; after: string | null },
+  query: string,
+  variables: Record<string, string | number | null>,
   signal?: AbortSignal,
-): Promise<SearchResponse> {
+): Promise<T> {
   const response = await fetch(ENDPOINT, {
     method: "POST",
     headers: {
@@ -72,7 +105,7 @@ async function post(
       "content-type": "application/json",
       "user-agent": "prq",
     },
-    body: JSON.stringify({ query: SCAN_QUERY, variables }),
+    body: JSON.stringify({ query, variables }),
     signal,
   });
 
@@ -88,7 +121,7 @@ async function post(
     );
   }
 
-  let parsed: { data?: SearchResponse; errors?: Array<{ message?: string; type?: string }> };
+  let parsed: { data?: T; errors?: Array<{ message?: string; type?: string }> };
   try {
     parsed = JSON.parse(body);
   } catch {
@@ -131,7 +164,17 @@ async function runFilter(
   let truncated: FilterResult["truncated"] = null;
 
   for (let page = 0; page < MAX_PAGES; page++) {
-    const data: SearchResponse = await post(token, { q, first: PAGE_SIZE, after }, signal);
+    // Annotated, not inferred. `after` is reassigned from this very response, so
+    // the object literal's contextual type makes the compiler chase `data` ->
+    // `endCursor` -> `after` -> `data` and give up with an implicit `any`
+    // (TS7022). The annotation cuts the cycle; a declared type on `after` does
+    // not, because the literal is typed from its narrowed type.
+    const data: SearchResponse = await post<SearchResponse>(
+      token,
+      SCAN_QUERY,
+      { q, first: PAGE_SIZE, after },
+      signal,
+    );
     viewer = data.viewer.login;
     total = data.search.issueCount;
     cost += data.rateLimit?.cost ?? 0;
@@ -223,5 +266,207 @@ export const github: ProviderClient = {
     if (projects.length === 0) return { rows: [], failed: [], viewer: "" };
     const result = await scan(projects, token, signal);
     return { rows: result.prs, failed: result.failures, viewer: result.viewer };
+  },
+};
+
+/**
+ * The census: one repository walked whole, every state, newest first.
+ *
+ * Shapes worth knowing before reading the walk. `repository` comes back **null**
+ * for a repo that was renamed, made private or deleted, and it arrives as a
+ * clean HTTP 200 — indistinguishable from success unless it is checked. And a
+ * census failure must not be fatal: the caller is walking a configured list, so
+ * one unreadable repo is a `failed` row, not an aborted run.
+ */
+interface RawCensusReview {
+  state?: string | null;
+  submittedAt?: string | null;
+  author?: { login?: string | null } | null;
+}
+
+interface RawCensusPr {
+  number?: number;
+  title?: string;
+  url?: string;
+  state?: string;
+  isDraft?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+  mergedAt?: string | null;
+  closedAt?: string | null;
+  additions?: number;
+  deletions?: number;
+  changedFiles?: number;
+  author?: { login?: string | null } | null;
+  mergedBy?: { login?: string | null } | null;
+  reviews?: { nodes?: Array<RawCensusReview | null> | null } | null;
+}
+
+interface CensusResponse {
+  rateLimit: { cost: number; remaining: number } | null;
+  repository: {
+    pullRequests: {
+      totalCount: number;
+      pageInfo: { hasNextPage: boolean; endCursor: string | null };
+      nodes?: Array<RawCensusPr | null> | null;
+    };
+  } | null;
+}
+
+function toCensusPr(repo: string, node: RawCensusPr): CensusPr {
+  const state = toPrState(node.state);
+  return {
+    provider: "github",
+    repo,
+    number: toCount(node.number),
+    state,
+    draft: node.isDraft === true,
+    title: typeof node.title === "string" ? sanitize(node.title) : "",
+    url: safeUrl(node.url),
+    author: toLogin(node.author?.login),
+    createdAt: toTime(node.createdAt) ?? "",
+    updatedAt: toTime(node.updatedAt) ?? "",
+    mergedAt: toTime(node.mergedAt),
+    closedAt: toTime(node.closedAt),
+    additions: toCount(node.additions),
+    deletions: toCount(node.deletions),
+    files: toCount(node.changedFiles),
+    // The contract is "empty unless merged", so the field is read only when the
+    // state agrees — a merger on a non-merged row would misreport who shipped it.
+    mergedBy: state === "merged" ? toLogin(node.mergedBy?.login) : "",
+  };
+}
+
+function collectReviews(repo: string, number: number, node: RawCensusPr): CensusReview[] {
+  const out: CensusReview[] = [];
+  for (const review of node.reviews?.nodes ?? []) {
+    if (!review) continue;
+    const act = toReviewAct(review.state);
+    // PENDING is an unsubmitted draft review, visible only to its author. It is
+    // not an act, and counting it would credit a review nobody ever received.
+    if (act === null) continue;
+    out.push({
+      provider: "github",
+      repo,
+      number,
+      reviewer: toLogin(review.author?.login),
+      act,
+      // Real on GitHub, which is why `reviewPrecision` is exact here.
+      at: toTime(review.submittedAt),
+    });
+  }
+  return out;
+}
+
+/**
+ * A refusal, which is a contract and not merely an early return: no rows, no
+ * reviews, `truncated` false, and a message that has crossed the trust boundary
+ * — server error text ends up in the terminal like any other remote string.
+ */
+function refused(repo: string, failed: string): RepoCensus {
+  return {
+    provider: "github",
+    repo,
+    prs: [],
+    reviews: [],
+    reviewPrecision: "exact",
+    failed: sanitize(failed),
+    truncated: false,
+  };
+}
+
+/**
+ * Walks one repository. `since` is a watermark, not a filter: pages arrive
+ * newest-updated first, so the first row that predates it ends the walk and is
+ * itself dropped — the caller already holds it and everything behind it.
+ *
+ * Rows are discarded on failure rather than returned as a partial census. A
+ * prefix that looks whole is the one outcome that would poison the store, since
+ * `writeCensus` replaces a repo's history wholesale.
+ */
+export async function readRepoCensus(
+  repo: string,
+  token: string,
+  since: string | null,
+  signal?: AbortSignal,
+): Promise<RepoCensus> {
+  const prs: CensusPr[] = [];
+  const reviews: CensusReview[] = [];
+  let truncated = false;
+
+  try {
+    const { owner, name } = splitRepo(repo);
+    // Canonicalised for the same reason `canonicalTime` exists: the comparison
+    // below is a string comparison, and an offset-bearing watermark would sort
+    // by its digits rather than its instant.
+    const floor = since === null ? null : canonicalTime(since);
+    let after: string | null = null;
+
+    for (let page = 0; page < CENSUS_MAX_PAGES; page++) {
+      // Checked between pages, not only inside `fetch`: the largest repo is 34
+      // requests, and a Ctrl-C must not wait for the rest of them.
+      signal?.throwIfAborted();
+
+      // Annotated for the same reason as the scan walk above: `after` closes a
+      // reference cycle the compiler will not resolve on its own.
+      const data: CensusResponse = await post<CensusResponse>(
+        token,
+        CENSUS_QUERY,
+        { owner, name, first: CENSUS_PAGE_SIZE, after },
+        signal,
+      );
+      const connection = data.repository?.pullRequests;
+      if (!connection) {
+        throw new GitHubError(
+          `GitHub returned no repository — ${repo} is private, renamed or gone`,
+        );
+      }
+
+      let reachedFloor = false;
+      for (const node of connection.nodes ?? []) {
+        if (!node) continue;
+        const pr = toCensusPr(repo, node);
+        if (floor !== null && pr.updatedAt < floor) {
+          reachedFloor = true;
+          break;
+        }
+        prs.push(pr);
+        reviews.push(...collectReviews(repo, pr.number, node));
+      }
+      if (reachedFloor) break;
+
+      const { hasNextPage, endCursor } = connection.pageInfo;
+      // A null cursor with hasNextPage set would send `after` back to null and
+      // re-fetch page one forever. Treat a missing cursor as the end.
+      if (!hasNextPage || !endCursor) break;
+      if (page === CENSUS_MAX_PAGES - 1) {
+        // Say so rather than returning a prefix dressed as a whole history.
+        truncated = true;
+        break;
+      }
+      after = endCursor;
+    }
+  } catch (error) {
+    return refused(repo, error instanceof Error ? error.message : String(error));
+  }
+
+  return {
+    provider: "github",
+    repo,
+    prs,
+    reviews,
+    reviewPrecision: "exact",
+    failed: null,
+    truncated,
+  };
+}
+
+/** The GitHub half of the census seam. */
+export const githubCensus: CensusClient = {
+  async censusRepo(repo, since, signal): Promise<RepoCensus> {
+    // Before the token, deliberately: an unvalidated repo reaches a query, and
+    // there is no sense spawning `gh auth token` for a name we will refuse.
+    if (!isValidRepo(repo)) return refused(repo, `not owner/name: ${JSON.stringify(repo)}`);
+    return readRepoCensus(repo, await githubToken(), since, signal);
   },
 };
