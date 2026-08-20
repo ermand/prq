@@ -46,6 +46,12 @@ export interface RepoRow {
   key: string;
   provider: Provider;
   repo: string;
+  /**
+   * False when marked inactive: still listed and still counted, never fetched.
+   * Carried here because this is the page called "Projects" — an inactive one
+   * looking identical to an active one is the whole failure.
+   */
+  active: boolean;
   counts: StateCounts;
   contributors: number;
   lastActivity: string | null;
@@ -96,10 +102,14 @@ export interface PeoplePayload {
 
 export interface RepoDetailPayload {
   key: string;
+  provider: Provider;
+  repo: string;
   insight: RepoInsight | null;
   censusAt: string | null;
   failed: string | null;
   truncated: boolean;
+  /** False when marked inactive. The page has to say so, or it looks current. */
+  active: boolean;
 }
 
 export interface PersonDetailPayload {
@@ -177,6 +187,7 @@ export const getRepos = createServerFn({ method: "GET" }).handler(() =>
         key,
         provider: project.provider,
         repo: project.path,
+        active: project.active,
         counts,
         contributors: authors.size,
         lastActivity,
@@ -221,22 +232,42 @@ export const getRepo = createServerFn({ method: "GET" })
       const provider = key.slice(0, split);
       const repo = key.slice(split + 1);
       if ((provider !== "github" && provider !== "gitlab") || repo === "") {
-        return { key, insight: null, censusAt: null, failed: null, truncated: false };
+        return {
+          key,
+          provider: "github",
+          repo: "",
+          insight: null,
+          censusAt: null,
+          failed: null,
+          truncated: false,
+          active: true,
+        };
       }
       // An untracked project reads as absent, not as empty. Its rows are still on
       // disk and would otherwise render a full page for something the driver
       // removed.
-      const isTracked = store
+      const tracked = store
         .projects()
-        .some((p) => p.provider === provider && p.path === repo);
-      if (!isTracked) {
-        return { key, insight: null, censusAt: null, failed: null, truncated: false };
+        .find((p) => p.provider === provider && p.path === repo);
+      if (tracked === undefined) {
+        return {
+          key,
+          provider,
+          repo,
+          insight: null,
+          censusAt: null,
+          failed: null,
+          truncated: false,
+          active: true,
+        };
       }
       const run = store.censusRuns().find((r) => r.provider === provider && r.repo === repo);
       const prs = store.censusPrs({ provider, repo });
       const reviews = store.censusReviews({ provider, repo });
       return {
         key,
+        provider,
+        repo,
         insight:
           run === undefined
             ? null
@@ -244,6 +275,7 @@ export const getRepo = createServerFn({ method: "GET" })
         censusAt: run?.at.toISOString() ?? null,
         failed: run?.failed ?? null,
         truncated: run?.truncated ?? false,
+        active: tracked.active,
       };
     }),
   );

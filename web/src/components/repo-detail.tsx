@@ -35,6 +35,8 @@ import type { AuthorStat, RepoInsight, ReviewerStat } from "../../../src/insight
 import { relativeAge } from "../../../src/render";
 import { MonthBars, Meter, Stat } from "./chart";
 import type { RepoDetailPayload } from "../server/census";
+import { setProjectActive } from "../server/settings";
+import { ActiveToggle } from "./active-toggle";
 import { Badge, providerLabel } from "./ui";
 import { VariantBar } from "./variant-bar";
 
@@ -325,11 +327,27 @@ function Header({ detail, insight }: { detail: RepoDetailPayload; insight: RepoI
           truncated
         </Badge>
       )}
-      {detail.censusAt !== null && (
-        <span suppressHydrationWarning className="ml-auto text-2xs text-zinc-500">
-          censused {relativeAge(detail.censusAt, now)} ago
-        </span>
-      )}
+      {/* No `inactive` badge here: the toggle to the right already says the word
+          in amber, and states it *and* acts. Two identical words side by side is
+          the badge rule in `ui.tsx` being broken — a badge earns its place only
+          when it says something nothing else does. */}
+      <span className="ml-auto flex items-baseline gap-3">
+        {detail.censusAt !== null && (
+          <span suppressHydrationWarning className="text-2xs text-zinc-500">
+            censused {relativeAge(detail.censusAt, now)} ago
+          </span>
+        )}
+        <ActiveToggle
+          active={detail.active}
+          what={`${detail.provider}:${detail.repo}`}
+          inactiveHint="stops it being synced and censused; its stored history keeps counting everywhere"
+          onToggle={(active) =>
+            setProjectActive({
+              data: { provider: detail.provider, path: detail.repo, active },
+            })
+          }
+        />
+      </span>
     </header>
   );
 }

@@ -17,6 +17,8 @@
 import { Link, useNavigate } from "@tanstack/react-router";
 import { relativeAge } from "../../../src/render";
 import type { RepoRow, ReposPayload } from "../server/census";
+import { setProjectActive } from "../server/settings";
+import { ActiveToggle } from "./active-toggle";
 import { Badge, providerLabel } from "./ui";
 
 /**
@@ -25,7 +27,7 @@ import { Badge, providerLabel } from "./ui";
  * these columns grow with the digits they hold instead of stranding them.
  */
 const COLS =
-  "grid grid-cols-[2.5rem_minmax(0,1fr)_4rem_3.5rem_4.5rem_3.5rem_4rem_4rem_4.5rem] items-center gap-x-3 px-4";
+  "grid grid-cols-[2.5rem_minmax(0,1fr)_4rem_3.5rem_4.5rem_3.5rem_4rem_4rem_4.5rem_5rem] items-center gap-x-3 px-4";
 
 /** A zero is a fact, but it is never the fact being scanned for. */
 function Num({ value }: { value: number }) {
@@ -125,8 +127,11 @@ export function RepoList({ repos, q }: { repos: ReposPayload; q?: string }) {
           <span className="text-right">Merged</span>
           <span className="text-right">Closed</span>
           <span className="text-right">People</span>
-          <span className="text-right">Active</span>
+          {/* Was "Active", which meant last activity. Renamed the moment a real
+              active/inactive mark arrived beside it — two columns, one word. */}
+          <span className="text-right">Last</span>
           <span className="text-right">Census</span>
+          <span className="text-right">Fetching</span>
         </div>
 
         {visible.length === 0 ? (
@@ -156,21 +161,37 @@ function ProjectRow({ row, now }: { row: RepoRow; now: Date }) {
         : "border-l-transparent";
 
   return (
-    <Link
-      to="/repos"
-      search={(prev) => ({ ...prev, r: row.key })}
-      resetScroll={false}
-      title={row.failed ?? `${row.provider}:${row.repo}`}
-      className={`${COLS} border-l-2 py-1.5 font-mono text-2xs hover:bg-zinc-800/60 ${edge}`}
+    /*
+     * A div with a stretched link underneath, not a link wrapping the cells. The
+     * toggle is a `<button>`, and a button inside an anchor is invalid HTML that
+     * browsers mangle — the same defect the board row was rebuilt to avoid. The
+     * cells are inert text the click falls through; the toggle sits above on its
+     * own layer.
+     */
+    <div
+      className={`${COLS} relative border-l-2 py-1.5 font-mono text-2xs hover:bg-zinc-800/60 ${edge} ${
+        // Dimmed, never hidden: it is still tracked, still counted, and has to
+        // stay findable to switch back on.
+        row.active ? "" : "opacity-60"
+      }`}
     >
-      <span className="text-zinc-600">{providerLabel(row.provider)}</span>
+      <Link
+        to="/repos"
+        search={(prev) => ({ ...prev, r: row.key })}
+        resetScroll={false}
+        title={row.failed ?? `${row.provider}:${row.repo}`}
+        aria-label={`Open ${row.provider}:${row.repo}`}
+        className="absolute inset-0"
+      />
+
+      <span className="pointer-events-none text-zinc-600">{providerLabel(row.provider)}</span>
 
       {/* The path is split so the informative end always renders: cutting from
           the right gives `…/kesh/k…`, losing exactly the segment that tells
           `kesh-back` from `kesh-front`. With no slash the prefix is empty and
           the leaf is the whole path, which is what `lastIndexOf` returning -1
           already yields. */}
-      <span className="flex min-w-0 items-baseline gap-2">
+      <span className="pointer-events-none flex min-w-0 items-baseline gap-2">
         <span className="flex min-w-0 shrink items-baseline">
           <span className="min-w-0 shrink truncate text-zinc-500">
             {row.repo.slice(0, row.repo.lastIndexOf("/") + 1)}
@@ -191,25 +212,38 @@ function ProjectRow({ row, now }: { row: RepoRow; now: Date }) {
         )}
       </span>
 
-      <span className="text-right text-sm text-zinc-100">{row.counts.total}</span>
-      <span className="text-right">
+      <span className="pointer-events-none text-right text-sm text-zinc-100">
+        {row.counts.total}
+      </span>
+      <span className="pointer-events-none text-right">
         <Num value={row.counts.open} />
       </span>
-      <span className="text-right">
+      <span className="pointer-events-none text-right">
         <Num value={row.counts.merged} />
       </span>
-      <span className="text-right">
+      <span className="pointer-events-none text-right">
         <Num value={row.counts.closed} />
       </span>
-      <span className="text-right">
+      <span className="pointer-events-none text-right">
         <Num value={row.contributors} />
       </span>
-      <span className="text-right">
+      <span className="pointer-events-none text-right">
         <Age iso={row.lastActivity} now={now} />
       </span>
-      <span className="text-right">
+      <span className="pointer-events-none text-right">
         <Age iso={row.censusAt} now={now} />
       </span>
-    </Link>
+
+      <span className="flex justify-end">
+        <ActiveToggle
+          active={row.active}
+          what={`${row.provider}:${row.repo}`}
+          inactiveHint="stops it being synced and censused; its stored history keeps counting everywhere"
+          onToggle={(active) =>
+            setProjectActive({ data: { provider: row.provider, path: row.repo, active } })
+          }
+        />
+      </span>
+    </div>
   );
 }
