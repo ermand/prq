@@ -106,7 +106,10 @@ export function Row({
           <span className="shrink-0 text-zinc-400">#{pr.number}</span>
         </span>
 
-        <span className="flex min-w-0 flex-1 items-baseline gap-2">
+        {/* `shrink` without grow. As `flex-1` the title absorbed all the slack
+            and shoved the badges over beside the age, so on a 3000px screen the
+            badges describing a PR sat a thousand pixels from its title. */}
+        <span className="flex min-w-0 shrink items-baseline gap-2">
           {pr.draft && (
             <span className="shrink-0 text-2xs font-semibold tracking-wide text-zinc-500 uppercase">
               draft
@@ -119,7 +122,7 @@ export function Row({
           </span>
         </span>
 
-        <span className="flex shrink-0 flex-wrap items-center gap-1.5">
+        <span className="flex shrink-0 flex-wrap items-center gap-1.5 lg:mr-auto">
           {verdict && <Badge tone={verdict.tone}>{verdict.text}</Badge>}
           {checks && <Badge tone={checks.tone}>{checks.text}</Badge>}
           {merge && <Badge tone={merge.tone}>{merge.text}</Badge>}

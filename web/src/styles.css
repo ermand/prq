@@ -29,6 +29,21 @@
 @layer base {
   html {
     color-scheme: dark;
+
+    /*
+     * Everything downstream is in `rem` — the type scale above, and Tailwind's
+     * spacing and fixed column widths — so this one declaration scales the
+     * whole interface with the window.
+     *
+     * It exists because a ~3000px-wide display renders a 15px title at about
+     * the apparent size of 8px on a laptop, and the board became unreadable
+     * exactly on the screens it was widened for. Fixed pixel type cannot serve
+     * both a 1400px window and a 3000px one.
+     *
+     * 16px up to ~1600px wide, then linear to 20px at ~3000px, and capped so an
+     * ultrawide does not keep inflating.
+     */
+    font-size: clamp(16px, 0.29vw + 11.4px, 20px);
   }
 
   body {
