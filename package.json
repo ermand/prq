@@ -12,7 +12,6 @@
     "sync": "bun src/cli.ts sync",
     "census": "bun src/cli.ts census",
     "scan": "bun src/scan-cli.ts",
-    "prototype:tracking": "bun src/tracking-tui.prototype.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit && tsc --noEmit -p web",
     "check": "bun run typecheck && bun test",
