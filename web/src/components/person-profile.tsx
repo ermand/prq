@@ -34,6 +34,14 @@ import { getLinkable, linkPerson, unlinkAccount } from "../server/settings";
 import { MonthBars, Meter, Stat } from "./chart";
 import { NameEditor } from "./name-editor";
 import { Badge, providerLabel } from "./ui";
+import {
+  PAGE_FRAME,
+  PAGE_TOOLBAR,
+  ROW_CONTROL,
+  SUBTABLE_ROW,
+  TOOLBAR_CONTENT,
+  TOOLBAR_CONTROL,
+} from "./system";
 
 /** Thousands separators without `toLocaleString`, whose grouping is a locale. */
 const num = (n: number) => n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
@@ -79,32 +87,34 @@ export function PersonProfile({ profile }: { profile: PersonDetailPayload }) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <header className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-border-muted bg-surface px-4 py-2.5">
-        <Link
-          to="/people"
-          search={{}}
-          className="text-meta text-fg-muted hover:text-fg"
-        >
-          ← people
-        </Link>
-        {/*
-         * The person's name is what this page is about, so it is the `<h1>` —
-         * the page previously had no `<h1>` at all and opened at the section
-         * `<h2>`s. `min-w-0` keeps the editor's own truncation working now that
-         * a block element sits between it and the flex row.
-         */}
-        <h1 className="flex min-w-0">
-          <NameEditor
-            id={person.id}
-            label={person.label}
-            textClass="text-title text-fg"
-          />
-        </h1>
-        {bot && <Badge tone="mute">bot</Badge>}
-        {person.aliases.length > 1 && (
-          <Badge tone="info">{person.aliases.length} forges</Badge>
-        )}
-        <span className="ml-auto font-mono text-meta text-fg-muted">{person.id}</span>
+      <header className={PAGE_TOOLBAR}>
+        <div className={`${PAGE_FRAME} ${TOOLBAR_CONTENT} gap-x-3`}>
+          <Link
+            to="/people"
+            search={{}}
+            className="text-meta text-fg-muted hover:text-fg"
+          >
+            ← people
+          </Link>
+          {/*
+           * The person's name is what this page is about, so it is the `<h1>` —
+           * the page previously had no `<h1>` at all and opened at the section
+           * `<h2>`s. `min-w-0` keeps the editor's own truncation working now that
+           * a block element sits between it and the flex row.
+           */}
+          <h1 className="flex min-w-0">
+            <NameEditor
+              id={person.id}
+              label={person.label}
+              textClass="text-title text-fg"
+            />
+          </h1>
+          {bot && <Badge tone="mute">bot</Badge>}
+          {person.aliases.length > 1 && (
+            <Badge tone="info">{person.aliases.length} forges</Badge>
+          )}
+          <span className="ml-auto font-mono text-meta text-fg-muted">{person.id}</span>
+        </div>
       </header>
 
       <main className="min-h-0 flex-1 overflow-y-auto">
@@ -115,7 +125,7 @@ export function PersonProfile({ profile }: { profile: PersonDetailPayload }) {
          * and no wider: a 3000px screen would otherwise set the caveat as one
          * 2000px line, which nobody reads.
          */}
-        <div className="mx-auto w-full max-w-[76rem] space-y-4 p-4">
+        <div className={`${PAGE_FRAME} space-y-4 py-4`}>
           <Identity person={person} spanYears={spanYears} />
           <Wrote person={person} bot={bot} />
           <Reviews person={person} />
@@ -213,9 +223,8 @@ function Identity({
             ))}
             <button
               type="button"
-              disabled={loading || busy}
+              className={`${ROW_CONTROL} border-border text-fg-muted hover:border-accent hover:text-accent disabled:opacity-50`}
               onClick={() => (candidates === null ? void openPicker() : setCandidates(null))}
-              className="rounded border border-border px-1.5 py-0.5 text-chip text-fg-muted hover:border-accent hover:text-accent disabled:opacity-50"
             >
               {loading ? "loading…" : candidates === null ? "link an account" : "close"}
             </button>
@@ -309,9 +318,8 @@ function LinkPicker({
           type="search"
           value={needle}
           placeholder="filter identities"
-          aria-label="Filter identities to link"
+          className={`${TOOLBAR_CONTROL} w-48`}
           onChange={(e) => setNeedle(e.target.value)}
-          className="w-44 rounded border border-border bg-surface px-2 py-0.5 text-chip text-fg placeholder:text-fg-subtle focus:border-accent"
         />
         <span className="text-meta text-fg-muted">
           {ordered.length} of {candidates.length} — linking folds the one you pick into
@@ -348,9 +356,8 @@ function LinkPicker({
             </span>
             <button
               type="button"
-              disabled={busy}
+              className={`${ROW_CONTROL} border-accent-emphasis bg-accent-emphasis text-white hover:bg-accent hover:text-canvas disabled:opacity-50`}
               onClick={() => onPick(candidate)}
-              className="rounded bg-accent-emphasis px-2 py-0.5 text-chip text-white hover:bg-accent hover:text-canvas disabled:opacity-50"
             >
               link
             </button>
@@ -456,7 +463,7 @@ function Repos({ person }: { person: PersonInsight }) {
              */}
             <div
               role="row"
-              className="relative flex items-center gap-3 border-b border-border-muted py-1.5 hover:bg-surface"
+              className={`${SUBTABLE_ROW} relative flex items-center gap-3 border-b border-border-muted hover:bg-surface`}
             >
               <span
                 role="cell"

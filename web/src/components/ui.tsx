@@ -59,10 +59,10 @@ export function Pill({
   return (
     <span
       title={title}
-      className={`rounded border px-2 py-1 font-sans text-chip transition-colors ${
+      className={`inline-flex h-8 items-center rounded-md border px-3 font-sans text-chip leading-none transition-colors ${
         active
           ? "border-accent/60 bg-accent/15 text-accent"
-          : "border-border text-fg-muted hover:border-fg-muted hover:text-fg"
+          : "border-border text-fg-muted hover:border-fg-muted hover:bg-surface hover:text-fg"
       }`}
     >
       {children}

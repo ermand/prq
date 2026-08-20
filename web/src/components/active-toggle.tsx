@@ -14,6 +14,7 @@
 
 import { useRouter } from "@tanstack/react-router";
 import { useState } from "react";
+import { ROW_CONTROL } from "./system";
 
 export function ActiveToggle({
   active,
@@ -69,10 +70,10 @@ export function ActiveToggle({
          * control when it lived only on the settings page, and a hover-only
          * affordance would recreate exactly that.
          */
-        className={`rounded px-1.5 py-0.5 font-sans text-chip transition-colors disabled:opacity-50 ${
+        className={`${ROW_CONTROL} ${
           active
-            ? "border border-transparent text-fg-muted hover:border-border hover:bg-surface hover:text-fg"
-            : "border border-attention/50 bg-attention/10 text-attention hover:border-attention"
+            ? "border-transparent text-fg-muted hover:border-border hover:bg-surface hover:text-fg"
+            : "border-attention/50 bg-attention/10 text-attention hover:border-attention"
         }`}
       >
         {busy ? "…" : active ? "active" : "inactive"}

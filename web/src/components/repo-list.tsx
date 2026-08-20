@@ -20,6 +20,14 @@ import type { RepoRow, ReposPayload } from "../server/census";
 import { setProjectActive } from "../server/settings";
 import { ActiveToggle } from "./active-toggle";
 import { Badge, providerLabel } from "./ui";
+import {
+  PAGE_FRAME,
+  PAGE_TOOLBAR,
+  TABLE_HEADER,
+  TABLE_ROW,
+  TOOLBAR_CONTENT,
+  TOOLBAR_CONTROL,
+} from "./system";
 
 /**
  * Shared by the header labels and every row, so the two cannot drift. Widths
@@ -86,51 +94,53 @@ export function RepoList({ repos, q }: { repos: ReposPayload; q?: string }) {
        * its root heading without changing a pixel.
        */}
       <h1 className="sr-only">Projects</h1>
-      <header className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-border-muted bg-surface px-4 py-2.5">
-        <span className="text-body text-fg-muted">
-          {repos.repos.length} project{repos.repos.length === 1 ? "" : "s"}
-          {" · "}
-          <span className="text-fg">{repos.totals.total}</span> pull requests
-          {" · "}
-          {repos.totals.open} open, {repos.totals.merged} merged,{" "}
-          {repos.totals.closed} closed
-          {" · "}
-          {repos.people} people
-          {repos.censusAt !== null && (
-            <>
-              {" · "}
-              <span suppressHydrationWarning>
-                oldest census {relativeAge(repos.censusAt, now)} ago
-              </span>
-            </>
-          )}
-        </span>
+      <header className={PAGE_TOOLBAR}>
+        <div className={`${PAGE_FRAME} ${TOOLBAR_CONTENT}`}>
+          <span className="text-body text-fg-muted">
+            {repos.repos.length} project{repos.repos.length === 1 ? "" : "s"}
+            {" · "}
+            <span className="text-fg">{repos.totals.total}</span> pull requests
+            {" · "}
+            {repos.totals.open} open, {repos.totals.merged} merged,{" "}
+            {repos.totals.closed} closed
+            {" · "}
+            {repos.people} people
+            {repos.censusAt !== null && (
+              <>
+                {" · "}
+                <span suppressHydrationWarning>
+                  oldest census {relativeAge(repos.censusAt, now)} ago
+                </span>
+              </>
+            )}
+          </span>
 
-        <div className="ml-auto flex items-center gap-2">
-          {broken > 0 && (
-            <Badge tone="bad" title="These projects hold whatever was read before the error">
-              {broken} census failure{broken === 1 ? "" : "s"}
-            </Badge>
-          )}
-          {clipped > 0 && (
-            <Badge tone="warn" title="Hit the page cap — the oldest history is missing">
-              {clipped} truncated
-            </Badge>
-          )}
-          <input
-            type="search"
-            value={q ?? ""}
-            placeholder="filter"
-            aria-label="Filter projects by path"
-            onChange={(e) =>
-              navigate({
-                search: (prev) => ({ ...prev, q: e.target.value || undefined }),
-                replace: true,
-                resetScroll: false,
-              })
-            }
-            className="w-40 rounded border border-border bg-surface px-2 py-1 text-chip text-fg placeholder:text-fg-subtle focus:border-accent"
-          />
+          <div className="ml-auto flex max-w-full flex-wrap items-center justify-end gap-2">
+            {broken > 0 && (
+              <Badge tone="bad" title="These projects hold whatever was read before the error">
+                {broken} census failure{broken === 1 ? "" : "s"}
+              </Badge>
+            )}
+            {clipped > 0 && (
+              <Badge tone="warn" title="Hit the page cap — the oldest history is missing">
+                {clipped} truncated
+              </Badge>
+            )}
+            <input
+              type="search"
+              value={q ?? ""}
+              placeholder="Filter projects"
+              aria-label="Filter projects by path"
+              onChange={(e) =>
+                navigate({
+                  search: (prev) => ({ ...prev, q: e.target.value || undefined }),
+                  replace: true,
+                  resetScroll: false,
+                })
+              }
+              className={`${TOOLBAR_CONTROL} w-48`}
+            />
+          </div>
         </div>
       </header>
 
@@ -166,11 +176,12 @@ export function RepoList({ repos, q }: { repos: ReposPayload; q?: string }) {
           aria-label="Censused projects"
           aria-rowcount={repos.repos.length + 1}
           aria-colcount={10}
+          className={PAGE_FRAME}
         >
           <div
             role="row"
             aria-rowindex={1}
-            className={`${COLS} sticky top-0 z-10 border-b border-border-muted bg-surface py-1.5 text-label tracking-wide text-fg-muted uppercase backdrop-blur`}
+            className={`${COLS} ${TABLE_HEADER} sticky top-0 z-10 border-b border-border-muted bg-surface text-label tracking-wide text-fg-muted uppercase backdrop-blur`}
           >
             {/* The forge column is a two-letter mark with no room for a word, so
                 its header is a label rather than text. */}
@@ -232,7 +243,7 @@ function ProjectRow({ row, now, rowIndex }: { row: RepoRow; now: Date; rowIndex:
     <div
       role="row"
       aria-rowindex={rowIndex}
-      className={`${COLS} relative border-l-2 py-1.5 font-mono text-num hover:bg-surface ${edge} ${
+      className={`${COLS} ${TABLE_ROW} relative border-l-2 font-mono text-num hover:bg-surface ${edge} ${
         // Dimmed, never hidden: it is still tracked, still counted, and has to
         // stay findable to switch back on.
         row.active ? "" : "border-l-attention/40 bg-attention/[0.03]"

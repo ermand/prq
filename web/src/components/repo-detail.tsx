@@ -36,6 +36,11 @@ import { setProjectActive } from "../server/settings";
 import { ActiveToggle } from "./active-toggle";
 import { Authors, NOT_A_SCORE, Reviewers } from "./repo-leaderboards";
 import { Badge, providerLabel } from "./ui";
+import {
+  PAGE_FRAME,
+  PAGE_TOOLBAR,
+  TOOLBAR_CONTENT,
+} from "./system";
 
 /**
  * Hours below two days, days above. 372 hours is a number nobody converts in
@@ -148,55 +153,53 @@ function Throughput({ insight }: { insight: RepoInsight }) {
 function Header({ detail, insight }: { detail: RepoDetailPayload; insight: RepoInsight }) {
   const now = new Date();
   return (
-    <header className="flex shrink-0 flex-wrap items-baseline gap-x-4 gap-y-1 border-b border-border-muted bg-surface px-6 py-3">
-      <Link
-        to="/repos"
-        // Drops the project and keeps everything else: the filter that found
-        // this project is what the reader wants to come back to.
-        search={(prev) => ({ ...prev, r: undefined })}
-        className="text-body text-fg-muted hover:text-accent"
-      >
-        ← projects
-      </Link>
-      <h1 className="min-w-0 font-mono text-title text-fg">
-        {/* `text-title` carries Primer's semibold, and the forge prefix is not
-            part of the name — `font-normal` keeps it at `text-meta`'s weight. */}
-        <span className="mr-2 text-meta font-normal text-fg-subtle">
-          {providerLabel(insight.provider)}
-        </span>
-        {insight.repo}
-      </h1>
-      {detail.failed !== null && (
-        <Badge tone="bad" title={detail.failed}>
-          census failed
-        </Badge>
-      )}
-      {detail.truncated && (
-        <Badge tone="warn" title="Hit the page cap — the oldest history is missing">
-          truncated
-        </Badge>
-      )}
-      {/* No `inactive` badge here: the toggle to the right already says the word
-          in `attention`, and states it *and* acts. Two identical words side by side is
-          the badge rule in `ui.tsx` being broken — a badge earns its place only
-          when it says something nothing else does. */}
-      <span className="ml-auto flex items-baseline gap-3">
-        {detail.censusAt !== null && (
-          <span suppressHydrationWarning className="text-meta text-fg-muted">
-            censused {relativeAge(detail.censusAt, now)} ago
+    <header className={PAGE_TOOLBAR}>
+      <div className={`${PAGE_FRAME} ${TOOLBAR_CONTENT} gap-x-3`}>
+        <Link
+          to="/repos"
+          // Drops the project and keeps everything else: the filter that found
+          // this project is what the reader wants to come back to.
+          search={(prev) => ({ ...prev, r: undefined })}
+          className="text-meta text-fg-muted hover:text-accent"
+        >
+          ← projects
+        </Link>
+        <h1 className="min-w-0 font-mono text-title text-fg">
+          {/* `text-title` carries Primer's semibold, and the forge prefix is not
+              part of the name — `font-normal` keeps it at `text-meta`'s weight. */}
+          <span className="mr-2 text-meta font-normal text-fg-subtle">
+            {providerLabel(insight.provider)}
           </span>
+          {insight.repo}
+        </h1>
+        {detail.failed !== null && (
+          <Badge tone="bad" title={detail.failed}>
+            census failed
+          </Badge>
         )}
-        <ActiveToggle
-          active={detail.active}
-          what={`${detail.provider}:${detail.repo}`}
-          inactiveHint="stops it being synced and censused; its stored history keeps counting everywhere"
-          onToggle={(active) =>
-            setProjectActive({
-              data: { provider: detail.provider, path: detail.repo, active },
-            })
-          }
-        />
-      </span>
+        {detail.truncated && (
+          <Badge tone="warn" title="Hit the page cap — the oldest history is missing">
+            truncated
+          </Badge>
+        )}
+        <span className="ml-auto flex items-baseline gap-3">
+          {detail.censusAt !== null && (
+            <span suppressHydrationWarning className="text-meta text-fg-muted">
+              censused {relativeAge(detail.censusAt, now)} ago
+            </span>
+          )}
+          <ActiveToggle
+            active={detail.active}
+            what={`${detail.provider}:${detail.repo}`}
+            inactiveHint="stops it being synced and censused; its stored history keeps counting everywhere"
+            onToggle={(active) =>
+              setProjectActive({
+                data: { provider: detail.provider, path: detail.repo, active },
+              })
+            }
+          />
+        </span>
+      </div>
     </header>
   );
 }
@@ -419,8 +422,10 @@ export function RepoDetail({ detail }: { detail: RepoDetailPayload }) {
   return (
     <main className="flex min-h-0 flex-1 flex-col">
       <Header detail={detail} insight={insight} />
-      <div className="min-h-0 flex-1 overflow-y-auto pb-16">
-        <Body insight={insight} />
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className={PAGE_FRAME}>
+          <Body insight={insight} />
+        </div>
       </div>
     </main>
   );

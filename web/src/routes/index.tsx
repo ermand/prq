@@ -17,6 +17,12 @@ import { matchesFilter, relativeAge } from "../../../src/render";
 import { Detail } from "../components/detail";
 import { Row } from "../components/row";
 import { BUCKET_TONE, Pill } from "../components/ui";
+import {
+  PAGE_TOOLBAR,
+  TABLE_HEADER,
+  TOOLBAR_CONTENT,
+  TOOLBAR_CONTROL,
+} from "../components/system";
 import { getBoard, runSync } from "../server/board";
 
 /**
@@ -128,86 +134,85 @@ function Board() {
        * `sr-only` gives the document a root heading without taking a pixel.
        */}
       <h1 className="sr-only">Board</h1>
-      <header className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-border-muted bg-surface px-4 py-2.5">
+      <header className={PAGE_TOOLBAR}>
+        <div className={`${TOOLBAR_CONTENT} px-4`}>
+          <span className="text-meta text-fg-muted">
+            {board.viewer === "" ? "not synced" : board.viewer}
+            {" · "}
+            {board.prs.length} open
+            {" · "}
+            {board.projects.length} project{board.projects.length === 1 ? "" : "s"}
+            {board.lastSync !== null && (
+              <> {" · "}synced {relativeAge(board.lastSync, now)} ago</>
+            )}
+          </span>
 
-        <span className="text-meta text-fg-muted">
-          {board.viewer === "" ? "not synced" : board.viewer}
-          {" · "}
-          {board.prs.length} open
-          {" · "}
-          {board.projects.length} project{board.projects.length === 1 ? "" : "s"}
-          {board.lastSync !== null && (
-            <> {" · "}synced {relativeAge(board.lastSync, now)} ago</>
-          )}
-        </span>
+          <div className="ml-auto flex max-w-full flex-wrap items-center justify-end gap-2">
+            <input
+              type="search"
+              value={filter}
+              placeholder="Filter pull requests"
+              aria-label="Filter pull requests"
+              onChange={(e) =>
+                navigate({
+                  search: { ...search, q: e.target.value || undefined },
+                  replace: true,
+                  resetScroll: false,
+                })
+              }
+              className={`${TOOLBAR_CONTROL} w-48`}
+            />
 
-        <div className="ml-auto flex items-center gap-2">
-          <input
-            type="search"
-            value={filter}
-            placeholder="filter"
-            aria-label="Filter pull requests"
-            onChange={(e) =>
-              navigate({
-                search: { ...search, q: e.target.value || undefined },
-                replace: true,
-                resetScroll: false,
-              })
-            }
-            className="w-40 rounded border border-border bg-surface px-2 py-1 text-chip text-fg placeholder:text-fg-subtle focus:border-accent"
-          />
+            <Link
+              to="/"
+              search={{ ...search, changed: changed ? undefined : true }}
+              resetScroll={false}
+              title="Only rows that moved since the last sync — the TUI's `c`"
+            >
+              <Pill active={changed === true}>changed</Pill>
+            </Link>
 
-          <Link
-            to="/"
-            search={{ ...search, changed: changed ? undefined : true }}
-            resetScroll={false}
-            title="Only rows that moved since the last sync — the TUI's `c`"
-          >
-            <Pill active={changed === true}>changed</Pill>
-          </Link>
+            <Link
+              to="/"
+              search={{
+                ...search,
+                prov:
+                  prov === undefined ? "github" : prov === "github" ? "gitlab" : undefined,
+              }}
+              resetScroll={false}
+              title="Filter by forge"
+            >
+              <Pill active={prov !== undefined}>
+                {prov === undefined ? "forge" : prov === "github" ? "gh" : "gl"}
+              </Pill>
+            </Link>
 
-          {/* Cycles rather than offering three controls: with two forges a single
-              tap-through is fewer pixels and fewer decisions. */}
-          <Link
-            to="/"
-            search={{
-              ...search,
-              prov:
-                prov === undefined ? "github" : prov === "github" ? "gitlab" : undefined,
-            }}
-            resetScroll={false}
-            title="Filter by forge"
-          >
-            <Pill active={prov !== undefined}>
-              {prov === undefined ? "forge" : prov === "github" ? "gh" : "gl"}
-            </Pill>
-          </Link>
+            <Link
+              to="/"
+              search={{ ...search, nodraft: nodraft ? undefined : true }}
+              resetScroll={false}
+              title="Hide drafts"
+            >
+              <Pill active={nodraft === true}>no drafts</Pill>
+            </Link>
 
-          <Link
-            to="/"
-            search={{ ...search, nodraft: nodraft ? undefined : true }}
-            resetScroll={false}
-            title="Hide drafts"
-          >
-            <Pill active={nodraft === true}>no drafts</Pill>
-          </Link>
+            <Link
+              to="/"
+              search={{ ...search, flat: flat ? undefined : true }}
+              resetScroll={false}
+            >
+              <Pill active={flat === true}>{flat ? "group" : "flat"}</Pill>
+            </Link>
 
-          <Link
-            to="/"
-            search={{ ...search, flat: flat ? undefined : true }}
-            resetScroll={false}
-          >
-            <Pill active={flat === true}>{flat ? "group" : "flat"}</Pill>
-          </Link>
-
-          <button
-            type="button"
-            onClick={sync}
-            disabled={syncing}
-            className="rounded bg-accent-emphasis px-2.5 py-1 text-chip text-white hover:bg-accent hover:text-canvas disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {syncing ? "syncing…" : "sync"}
-          </button>
+            <button
+              type="button"
+              onClick={sync}
+              disabled={syncing}
+              className="h-8 rounded-md bg-accent-emphasis px-3 text-chip text-white transition-colors hover:bg-accent hover:text-canvas disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {syncing ? "syncing…" : "sync"}
+            </button>
+          </div>
         </div>
       </header>
 
@@ -259,7 +264,9 @@ function Board() {
           ) : (
             groupIntoBuckets(visible).map((bucket) => (
               <section key={bucket.id}>
-                <div className="sticky top-0 z-10 flex items-center gap-2 border-y border-border-muted bg-surface px-3 py-1.5 backdrop-blur">
+                <div
+                  className={`${TABLE_HEADER} sticky top-0 z-10 flex items-center gap-2 border-y border-border-muted bg-surface px-3 backdrop-blur`}
+                >
                   <span
                     aria-hidden="true"
                     className={`h-2 w-2 rounded-full ${BUCKET_TONE[bucket.id].dot}`}

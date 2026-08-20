@@ -41,6 +41,14 @@ import { ActiveToggle } from "./active-toggle";
 import { NameEditor } from "./name-editor";
 import { SameNameMerge, sameNameGroups } from "./same-name";
 import { Badge, Pill, providerLabel } from "./ui";
+import {
+  PAGE_FRAME,
+  PAGE_TOOLBAR,
+  TABLE_HEADER,
+  TABLE_ROW,
+  TOOLBAR_CONTENT,
+  TOOLBAR_CONTROL,
+} from "./system";
 
 /**
  * One place per column, because the header row and the data rows have to agree
@@ -124,65 +132,67 @@ export function PeopleList({
        * second copy of the word "People" above it.
        */}
       <h1 className="sr-only">People</h1>
-      <header className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-border-muted bg-surface px-4 py-2.5">
-        <span className="text-meta text-fg-muted">
-          {visible.length} identit{visible.length === 1 ? "y" : "ies"}
-          {filter !== "" && <> {" · "}of {people.people.length}</>}
-          {hiddenInactive > 0 && (
-            <>
-              {" · "}
-              <span className="text-attention">{hiddenInactive} inactive hidden</span>
-            </>
-          )}
-          {hiddenBots > 0 && (
-            <>
-              {" · "}
-              <span className="text-fg-muted">
-                {hiddenBots} bot{hiddenBots === 1 ? "" : "s"} hidden
-              </span>
-            </>
-          )}
-          {people.censusAt !== null && <> {" · "}census {people.censusAt.slice(0, 10)}</>}
-        </span>
+      <header className={PAGE_TOOLBAR}>
+        <div className={`${PAGE_FRAME} ${TOOLBAR_CONTENT}`}>
+          <span className="text-meta text-fg-muted">
+            {visible.length} identit{visible.length === 1 ? "y" : "ies"}
+            {filter !== "" && <> {" · "}of {people.people.length}</>}
+            {hiddenInactive > 0 && (
+              <>
+                {" · "}
+                <span className="text-attention">{hiddenInactive} inactive hidden</span>
+              </>
+            )}
+            {hiddenBots > 0 && (
+              <>
+                {" · "}
+                <span className="text-fg-muted">
+                  {hiddenBots} bot{hiddenBots === 1 ? "" : "s"} hidden
+                </span>
+              </>
+            )}
+            {people.censusAt !== null && <> {" · "}census {people.censusAt.slice(0, 10)}</>}
+          </span>
 
-        <div className="ml-auto flex items-center gap-2">
-          <input
-            type="search"
-            value={filter}
-            placeholder="filter"
-            aria-label="Filter people by name or account"
-            onChange={(e) =>
-              navigate({
-                to: "/people",
-                search: {
-                  q: e.target.value || undefined,
-                  bots: bots ? true : undefined,
-                  inactive: inactive ? true : undefined,
-                },
-                replace: true,
-                resetScroll: false,
-              })
-            }
-            className="w-40 rounded border border-border bg-surface px-2 py-1 text-chip text-fg placeholder:text-fg-subtle focus:border-accent"
-          />
+          <div className="ml-auto flex max-w-full flex-wrap items-center justify-end gap-2">
+            <input
+              type="search"
+              value={filter}
+              placeholder="Filter people"
+              aria-label="Filter people by name or account"
+              onChange={(e) =>
+                navigate({
+                  to: "/people",
+                  search: {
+                    q: e.target.value || undefined,
+                    bots: bots ? true : undefined,
+                    inactive: inactive ? true : undefined,
+                  },
+                  replace: true,
+                  resetScroll: false,
+                })
+              }
+              className={`${TOOLBAR_CONTROL} w-48`}
+            />
 
-          <Link
-            to="/people"
-            search={{ q, bots: bots ? true : undefined, inactive: inactive ? undefined : true }}
-            resetScroll={false}
-            title="Include people marked inactive. Their work still counts in every project's numbers; they are only off this list."
-          >
-            <Pill active={inactive}>inactive</Pill>
-          </Link>
+            <Link
+              to="/people"
+              search={{ q, bots: bots ? true : undefined, inactive: inactive ? undefined : true }}
+              resetScroll={false}
+              title="Include people marked inactive. Their work still counts in every project's numbers; they are only off this list."
+            >
+              <Pill active={inactive}>inactive</Pill>
+            </Link>
 
-          <Link
-            to="/people"
-            search={{ q, bots: bots ? undefined : true, inactive: inactive ? true : undefined }}
-            resetScroll={false}
-            title="Include automation. dependabot opened 126 pull requests and reviewed none, so it is out of the ranking by default."
-          >
-            <Pill active={bots}>bots</Pill>
-          </Link>
+            <Link
+              to="/people"
+              search={{ q, bots: bots ? undefined : true, inactive: inactive ? true : undefined }}
+              resetScroll={false}
+              title="Include automation. dependabot opened 126 pull requests and reviewed none, so it is out of the ranking by default."
+            >
+              <Pill active={bots}>bots</Pill>
+            </Link>
+          </div>
         </div>
       </header>
 
@@ -227,12 +237,12 @@ export function PeopleList({
             aria-label="People"
             aria-rowcount={people.people.length + 1}
             aria-colcount={6}
-            className="mx-auto w-full max-w-[68rem]"
+            className={PAGE_FRAME}
           >
             <div
               role="row"
               aria-rowindex={1}
-              className={`${COL.min} sticky top-0 z-10 flex items-center gap-3 border-b border-border-muted bg-canvas px-4 py-1.5 text-label tracking-wide text-fg-muted uppercase backdrop-blur`}
+              className={`${COL.min} ${TABLE_HEADER} sticky top-0 z-10 flex items-center gap-3 border-b border-border-muted bg-canvas px-4 text-label tracking-wide text-fg-muted uppercase backdrop-blur`}
             >
               <span role="columnheader" className="min-w-0 flex-1">person · accounts</span>
               <span role="columnheader" className={COL.n}>opened</span>
@@ -287,7 +297,7 @@ function PersonRowView({
     <div
       role="row"
       aria-rowindex={rowIndex}
-      className={`${COL.min} group relative flex items-center gap-3 border-b border-border-muted px-4 py-2 hover:bg-surface ${
+      className={`${COL.min} ${TABLE_ROW} group relative flex items-center gap-3 border-b border-border-muted px-4 hover:bg-surface ${
         // Dimmed, never hidden here: this row is only reachable because a filter
         // asked for it, and it has to stay legible enough to switch back on.
         person.active ? "" : "border-l-2 border-l-attention/40 bg-attention/[0.03]"

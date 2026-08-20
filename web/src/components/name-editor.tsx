@@ -29,6 +29,7 @@
 import { useRouter } from "@tanstack/react-router";
 import { useState } from "react";
 import { clearPersonName, renamePerson } from "../server/settings";
+import { ROW_CONTROL } from "./system";
 
 /**
  * The label a person falls back to with nothing stored. Mirrors the server's
@@ -159,13 +160,13 @@ export function NameEditor({
             close();
           }
         }}
-        className="w-44 rounded border border-accent-emphasis bg-surface px-2 py-0.5 text-chip text-fg placeholder:text-fg-subtle focus:border-accent disabled:opacity-50"
+        className={`${ROW_CONTROL} w-44 border-accent-emphasis bg-surface text-fg placeholder:text-fg-subtle focus:border-accent disabled:opacity-50`}
       />
       <button
         type="button"
         onClick={save}
         disabled={busy}
-        className="rounded bg-accent-emphasis px-2 py-0.5 text-chip text-white hover:bg-accent hover:text-canvas disabled:opacity-50"
+        className={`${ROW_CONTROL} border-accent-emphasis bg-accent-emphasis text-white hover:bg-accent hover:text-canvas disabled:opacity-50`}
       >
         save
       </button>
@@ -173,7 +174,7 @@ export function NameEditor({
         type="button"
         onClick={close}
         disabled={busy}
-        className="rounded border border-border px-2 py-0.5 text-chip text-fg-muted hover:border-fg-muted hover:text-fg disabled:opacity-50"
+        className={`${ROW_CONTROL} border-border text-fg-muted hover:border-fg-muted hover:text-fg disabled:opacity-50`}
       >
         esc
       </button>
@@ -183,7 +184,7 @@ export function NameEditor({
           onClick={clear}
           disabled={busy}
           title={`Drop the stored name; the display falls back to "${fallback}".`}
-          className="rounded border border-border px-2 py-0.5 text-chip text-fg-muted hover:border-danger hover:text-danger disabled:opacity-50"
+          className={`${ROW_CONTROL} border-border text-fg-muted hover:border-danger hover:text-danger disabled:opacity-50`}
         >
           clear
         </button>

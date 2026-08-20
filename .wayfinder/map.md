@@ -329,6 +329,25 @@ both belong here rather than in a ticket:
   which only became obvious side by side: inactive left Marin with one row,
   untracked left him with zero.
 
+- **A design system owns geometry as well as tokens** (2026-08-21). The first
+  unification pass fixed Primer typography, colour, contrast and semantics, but
+  screenshots still disagreed: Projects was 1568px wide, People 1088px, Settings
+  1024px; toolbars were 45–50.5px, rows 37.5–42.5px and controls 24–29.5px.
+  Tokens cannot repair independent page composition.
+  The settled application geometry is one 80rem content frame, a 48px global
+  nav, 56px page toolbar, 32px column header, 40px primary row, 32px toolbar
+  control and 28px row action. Board remains full-width because it is a
+  master/detail workspace, but uses the same nav, toolbar, controls and row
+  rhythm. The values live in `web/src/components/system.ts`, not copied Tailwind
+  strings. Measured after wiring: Projects and People tables both 1280px at a
+  1568px viewport; Settings rows differ by only their 2px status edge; all four
+  page toolbars are 57px including their border; every primary row is 40px.
+  One bug found by responsive verification: `w-full + px-4` initially made every
+  frame wider than its viewport because the padding was content-box. `box-border`
+  now lives in the shared frame, and a 320px viewport has zero uncontained
+  overflow. The nav owns horizontal scrolling at that width rather than widening
+  the document.
+
 ## Not yet specified
 
 - **Cursor paging, and what a project too big to scan means.** Truncation is now

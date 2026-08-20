@@ -16,6 +16,7 @@ import { useState } from "react";
 import type { PersonRow } from "../server/census";
 import { linkPerson } from "../server/settings";
 import { providerLabel } from "./ui";
+import { ROW_CONTROL } from "./system";
 
 /**
  * Groups the visible roster by display name, case- and space-insensitively.
@@ -96,7 +97,7 @@ export function SameNameMerge({
             : `Same name — merge this into ${account.provider}:${account.username}, ` +
               `so one profile carries both accounts`
         }
-        className="rounded border border-attention/50 bg-attention/10 px-1.5 py-0.5 text-chip text-attention hover:border-attention hover:bg-attention/20 disabled:opacity-50"
+        className={`${ROW_CONTROL} border-attention/50 bg-attention/10 text-attention hover:border-attention hover:bg-attention/20 disabled:opacity-50`}
       >
         {busy ? "merging…" : "same name — merge"}
       </button>

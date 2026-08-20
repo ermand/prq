@@ -45,6 +45,15 @@ import {
 } from "../server/settings";
 import { ActiveToggle } from "./active-toggle";
 import { providerLabel } from "./ui";
+import {
+  PAGE_FRAME,
+  PAGE_TOOLBAR,
+  ROW_CONTROL,
+  TABLE_HEADER,
+  TABLE_ROW,
+  TOOLBAR_CONTENT,
+  TOOLBAR_CONTROL,
+} from "./system";
 
 /**
  * The width below which a row stops shrinking and the region scrolls instead.
@@ -78,7 +87,7 @@ const COLS =
  * the fixed columns take 29.25rem and the longest path, the 46-character
  * `albanian-technology-distribution/kesh/kesh-back`, takes ~26rem.
  */
-const PANEL = "mx-auto w-full max-w-[64rem]";
+const PANEL = PAGE_FRAME;
 
 /** A zero is a fact, but it is never the fact being scanned for. */
 function Num({ value }: { value: number }) {
@@ -214,23 +223,25 @@ export function SettingsPanel({ settings }: { settings: SettingsPayload }) {
        * than a visible second copy of the word "Settings".
        */}
       <h1 className="sr-only">Settings</h1>
-      <header className="shrink-0 border-b border-border-muted bg-surface px-4 py-2.5">
-        <span className="text-meta text-fg-muted">
-          {settings.projects.length} tracked project
-          {settings.projects.length === 1 ? "" : "s"}
-          {" · "}
-          {github} github, {gitlab} gitlab
-          {" · "}
-          <span className="text-fg">{stored}</span> stored pull requests
-          {uncensused > 0 && (
-            <>
-              {" · "}
-              <span className="text-attention">
-                {uncensused} never censused
-              </span>
-            </>
-          )}
-        </span>
+      <header className={PAGE_TOOLBAR}>
+        <div className={`${PAGE_FRAME} ${TOOLBAR_CONTENT}`}>
+          <span className="text-meta text-fg-muted">
+            {settings.projects.length} tracked project
+            {settings.projects.length === 1 ? "" : "s"}
+            {" · "}
+            {github} github, {gitlab} gitlab
+            {" · "}
+            <span className="text-fg">{stored}</span> stored pull requests
+            {uncensused > 0 && (
+              <>
+                {" · "}
+                <span className="text-attention">
+                  {uncensused} never censused
+                </span>
+              </>
+            )}
+          </span>
+        </div>
       </header>
 
       {/*
@@ -311,7 +322,7 @@ export function SettingsPanel({ settings }: { settings: SettingsPayload }) {
         <div role="table" aria-label="Tracked projects">
           <div
             role="row"
-            className={`${PANEL} ${COLS} sticky top-0 z-10 border-b border-border-muted bg-surface py-1.5 text-label tracking-wide text-fg-muted uppercase backdrop-blur`}
+            className={`${PANEL} ${COLS} ${TABLE_HEADER} sticky top-0 z-10 border-b border-border-muted bg-surface text-label tracking-wide text-fg-muted uppercase backdrop-blur`}
           >
             {/* Two letters wide, so the header is a label and not a word. */}
             <span role="columnheader" aria-label="Forge" />
@@ -406,14 +417,14 @@ export function SettingsPanel({ settings }: { settings: SettingsPayload }) {
                         return { kind: "purged", deleted };
                       })
                     }
-                    className="rounded border border-danger/60 bg-danger/20 px-2 py-1 text-chip text-danger hover:bg-danger/30 disabled:opacity-50"
+                    className={`${ROW_CONTROL} border-danger/60 bg-danger/20 text-danger hover:bg-danger/30 disabled:opacity-50`}
                   >
                     {busy === "purge" ? "deleting…" : "delete permanently"}
                   </button>
                   <button
                     type="button"
                     onClick={() => setPurging(false)}
-                    className="rounded border border-border px-2 py-1 text-chip text-fg-muted hover:border-fg-muted hover:text-fg"
+                    className={`${ROW_CONTROL} border-border text-fg-muted hover:border-fg-muted hover:text-fg`}
                   >
                     keep them
                   </button>
@@ -427,7 +438,7 @@ export function SettingsPanel({ settings }: { settings: SettingsPayload }) {
                   setFailed(null);
                   setSaid(null);
                 }}
-                className="mt-2 rounded border border-border px-2 py-1 text-chip text-fg-muted hover:border-danger/60 hover:text-danger"
+                className={`${ROW_CONTROL} mt-2 border-border text-fg-muted hover:border-danger/60 hover:text-danger`}
               >
                 purge untracked rows…
               </button>
@@ -466,7 +477,7 @@ function AddProject({
         e.preventDefault();
         if (path.trim() !== "") onSubmit(provider, path.trim());
       }}
-      className={`${PANEL} border-b border-border-muted px-4 py-3`}
+      className={`${PANEL} border-b border-border-muted px-4 py-4`}
     >
       <div className="flex flex-wrap items-center gap-2">
         <label className="text-label tracking-wide text-fg-muted uppercase" htmlFor="add-provider">
@@ -476,7 +487,7 @@ function AddProject({
           id="add-provider"
           value={provider}
           onChange={(e) => setProvider(e.target.value === "gitlab" ? "gitlab" : "github")}
-          className="rounded border border-border bg-surface px-2 py-1 text-chip text-fg focus:border-accent"
+          className={`${TOOLBAR_CONTROL} w-24`}
         >
           <option value="github">github</option>
           <option value="gitlab">gitlab</option>
@@ -488,13 +499,13 @@ function AddProject({
           placeholder={provider === "github" ? "owner/name" : "group/project (nested is fine)"}
           aria-label="Project path"
           spellCheck={false}
-          className="w-[26rem] max-w-full rounded border border-border bg-surface px-2 py-1 font-mono text-chip text-fg placeholder:text-fg-subtle focus:border-accent"
+          className={`${TOOLBAR_CONTROL} w-[26rem] max-w-full font-mono`}
         />
 
         <button
           type="submit"
           disabled={busy || path.trim() === ""}
-          className="rounded border border-accent/60 bg-accent/15 px-2.5 py-1 text-chip text-accent hover:bg-accent/25 disabled:border-border disabled:bg-transparent disabled:text-fg-subtle"
+          className={`${TOOLBAR_CONTROL} border-accent/60 bg-accent/15 text-accent hover:bg-accent/25 disabled:border-border disabled:bg-transparent disabled:text-fg-subtle`}
         >
           {busy ? "adding…" : "add project"}
         </button>
@@ -549,7 +560,7 @@ function ProjectLine({
       {/* Mono is scoped to the cells that hold a path, a count or an age. The
           controls in this row are chips, and a chip is the same chip here as it
           is on the roster — inheriting mono from the row made it a third thing. */}
-      <div role="row" className={`${COLS} py-1.5 text-num`}>
+      <div role="row" className={`${COLS} ${TABLE_ROW} text-num`}>
         <span role="cell" className="font-mono text-fg-subtle">{providerLabel(row.provider)}</span>
 
         {/* Split on the last slash so the informative end always renders: the
@@ -593,7 +604,7 @@ function ProjectLine({
             <button
               type="button"
               onClick={onCancel}
-              className="rounded border border-border px-1.5 py-0.5 text-chip text-fg-muted hover:border-fg-muted hover:text-fg"
+              className={`${ROW_CONTROL} border-border text-fg-muted hover:border-fg-muted hover:text-fg`}
             >
               cancel
             </button>
@@ -601,7 +612,7 @@ function ProjectLine({
             <button
               type="button"
               onClick={onAsk}
-              className="rounded border border-border-muted px-1.5 py-0.5 text-chip text-fg-muted hover:border-attention/60 hover:text-attention"
+              className={`${ROW_CONTROL} border-border-muted text-fg-muted hover:border-attention/60 hover:text-attention`}
             >
               remove…
             </button>
@@ -646,7 +657,7 @@ function ProjectLine({
               type="button"
               disabled={busy}
               onClick={onRemove}
-              className="rounded border border-attention/60 bg-attention/15 px-2 py-0.5 text-chip text-attention hover:bg-attention/25 disabled:opacity-50"
+              className={`${ROW_CONTROL} border-attention/60 bg-attention/15 text-attention hover:bg-attention/25 disabled:opacity-50`}
             >
               {busy ? "untracking…" : "untrack it"}
             </button>

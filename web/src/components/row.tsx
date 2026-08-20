@@ -18,6 +18,7 @@
  * anchor, which is invalid HTML, so they sit side by side inside the row.
  */
 
+import { TABLE_ROW } from "./system";
 import { Link } from "@tanstack/react-router";
 import { label, type Change } from "../../../src/changes";
 import type { PullRequest } from "../../../src/domain";
@@ -79,7 +80,7 @@ export function Row({
         to="/"
         search={(prev) => ({ q: prev.q, flat: prev.flat, pr: pr.id })}
         resetScroll={false}
-        className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1 py-1.5 pl-3 hover:bg-surface lg:flex-nowrap"
+        className={`${TABLE_ROW} flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1 pl-3 hover:bg-surface lg:flex-nowrap`}
       >
         {/* Fixed column so the numbers line up down the list.
 

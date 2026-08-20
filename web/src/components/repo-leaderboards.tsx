@@ -15,6 +15,7 @@ import { identityKey, isBot } from "../../../src/census";
 import type { Provider } from "../../../src/domain";
 import type { AuthorStat, ReviewerStat } from "../../../src/insights";
 import { Badge, providerLabel } from "./ui";
+import { SUBTABLE_ROW } from "./system";
 
 /** The caption that keeps a ranked list from reading as a scoreboard. */
 export const NOT_A_SCORE =
@@ -76,7 +77,7 @@ function Track({ value, peak }: { value: number; peak: number }) {
  * describes. The cap is in `rem`, so it grows with the root font-size instead of
  * shrinking away on the wide screen it exists for.
  */
-const LIST = "max-w-4xl space-y-1.5";
+const LIST = "max-w-4xl";
 
 export function Authors({ authors, max }: { authors: AuthorStat[]; max: number }) {
   if (authors.length === 0) {
@@ -120,7 +121,7 @@ export function Authors({ authors, max }: { authors: AuthorStat[]; max: number }
             // Column widths sized to the widest live values: `268m 14c` and
             // `+948k −453k` on `pok-auctions` both wrapped onto a second line at
             // the sizes this started with, which doubled every row's height.
-            className="grid grid-cols-[minmax(0,1fr)_3rem_4.5rem_6.5rem] items-center gap-x-3 text-body"
+            className={`${SUBTABLE_ROW} grid grid-cols-[minmax(0,1fr)_3rem_4.5rem_6.5rem] items-center gap-x-3 text-body`}
           >
             <span role="cell" className="min-w-0">
               <PersonLink provider={author.provider} username={author.username} />
@@ -175,7 +176,7 @@ export function Reviewers({ reviewers, max }: { reviewers: ReviewerStat[]; max: 
             role="row"
             aria-rowindex={i + 2}
             key={identityKey(reviewer.provider, reviewer.username)}
-            className="grid grid-cols-[minmax(0,1fr)_3rem_8rem] items-center gap-x-3 text-body"
+            className={`${SUBTABLE_ROW} grid grid-cols-[minmax(0,1fr)_3rem_8rem] items-center gap-x-3 text-body`}
           >
             <span role="cell" className="min-w-0">
               <PersonLink provider={reviewer.provider} username={reviewer.username} />
