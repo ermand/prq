@@ -4,24 +4,37 @@
   "module": "src/cli.ts",
   "type": "module",
   "private": true,
-  "bin": { "prq": "src/cli.ts" },
+  "bin": {
+    "prq": "src/cli.ts"
+  },
   "scripts": {
     "start": "bun src/cli.ts",
     "sync": "bun src/cli.ts sync",
     "scan": "bun src/scan-cli.ts",
     "test": "bun test",
-    "typecheck": "tsc --noEmit",
-    "check": "tsc --noEmit && bun test",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p web",
+    "check": "bun run typecheck && bun test",
+    "web": "bun src/cli.ts web",
     "build": "bun build --compile --outfile dist/prq src/cli.ts"
   },
   "devDependencies": {
-    "@types/bun": "latest"
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/bun": "latest",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@vitejs/plugin-react": "^6.1.0",
+    "tailwindcss": "^4.3.3",
+    "vite": "^8.2.2"
   },
   "peerDependencies": {
     "typescript": "^5"
   },
   "dependencies": {
     "@opentui/core": "^0.5.1",
+    "@tanstack/react-router": "^1.170.31",
+    "@tanstack/react-start": "^1.168.48",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
     "yaml": "^2.9.0"
   }
 }

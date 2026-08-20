@@ -1,13 +1,13 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { parseArgs } from "./cli";
 import {
   oldestSync,
-  parseArgs,
   performSync,
   readAll,
   syncProvider,
   viewersOf,
   type ProviderOutcome,
-} from "./cli";
+} from "./engine";
 import type { Provider, RawPullRequest } from "./domain";
 import { Store } from "./store";
 
@@ -315,6 +315,8 @@ describe("parseArgs", () => {
     expect(parseArgs(["--state", "/tmp/a.db", "sync"])).toEqual({
       command: "sync",
       statePath: "/tmp/a.db",
+      port: undefined,
+      open: true,
     });
   });
 
@@ -322,7 +324,37 @@ describe("parseArgs", () => {
     expect(parseArgs(["sync", "--state", "/tmp/a.db"])).toEqual({
       command: "sync",
       statePath: "/tmp/a.db",
+      port: undefined,
+      open: true,
     });
+  });
+
+  test("reads the web port", () => {
+    expect(parseArgs(["web", "--port", "3000"]).port).toBe(3000);
+    expect(parseArgs(["web"]).port).toBeUndefined();
+  });
+
+  test("refuses a port that is not a number, rather than coercing it", () => {
+    // `--port abc` silently becoming NaN and falling back to the default is a
+    // worse outcome than refusing to start.
+    expect(() => parseArgs(["web", "--port", "abc"])).toThrow("--port needs a number");
+    expect(() => parseArgs(["web", "--port"])).toThrow("--port needs a number");
+  });
+
+  test("refuses a port outside the valid range", () => {
+    expect(() => parseArgs(["web", "--port", "0"])).toThrow("--port is out of range");
+    expect(() => parseArgs(["web", "--port", "70000"])).toThrow(
+      "--port is out of range",
+    );
+  });
+
+  test("--no-open suppresses the browser, and is on by default", () => {
+    expect(parseArgs(["web"]).open).toBe(true);
+    expect(parseArgs(["web", "--no-open"]).open).toBe(false);
+  });
+
+  test("never mistakes the port value for the subcommand", () => {
+    expect(parseArgs(["--port", "4177", "web"]).command).toBe("web");
   });
 
   test("no subcommand means the dashboard", () => {

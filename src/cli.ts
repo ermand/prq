@@ -12,202 +12,26 @@
  */
 
 import { mkdir } from "node:fs/promises";
-import { dirname } from "node:path";
-import { diff, type Change } from "./changes";
+import { dirname, join } from "node:path";
 import { configPath, EXAMPLE_CONFIG, loadConfig } from "./config";
-import { sanitize, type Provider, type PullRequest } from "./domain";
-import { github } from "./github";
-import { gitlab } from "./gitlab";
-import type { ProviderClient } from "./providers";
-import { resolveStorePath, Store, storePath, type SyncRecord } from "./store";
+import {
+  oldestSync,
+  performSync,
+  readAll,
+  viewersOf,
+} from "./engine";
+import { resolveStorePath, Store, storePath } from "./store";
 import { runApp } from "./tui";
-
-const CLIENTS: Record<Provider, ProviderClient> = { github, gitlab };
-export const PROVIDER_ORDER: Provider[] = ["github", "gitlab"];
-
-export interface ProviderOutcome {
-  provider: Provider;
-  /** Null when the scan was partial, so nothing was committed. */
-  sync: SyncRecord | null;
-  prs: PullRequest[];
-  changes: Change[];
-  failures: string[];
-  baselineReset: boolean;
-  /** Wall-clock time the shown rows describe. */
-  at: Date | null;
-  viewer: string;
-}
-
-export interface SyncOutcome {
-  byProvider: ProviderOutcome[];
-  prs: PullRequest[];
-  changes: Change[];
-  failures: string[];
-}
-
-/**
- * Fetches one provider, diffs against its stored state, and commits — but only
- * when its scan was whole. A partial result committed as a baseline makes every
- * later diff inherit the hole, so a partial scan is shown and discarded.
- */
-export async function syncProvider(
-  store: Store,
-  provider: Provider,
-  projects: string[],
-  signal?: AbortSignal,
-): Promise<ProviderOutcome> {
-  const previous = store.read(provider);
-  const empty: ProviderOutcome = {
-    provider,
-    sync: previous.sync,
-    prs: previous.prs,
-    changes: previous.changes,
-    failures: [],
-    baselineReset: previous.sync?.baselineReset ?? false,
-    at: previous.sync === null ? null : new Date(previous.sync.at),
-    viewer: previous.sync?.viewer ?? "",
-  };
-  // A provider with no configured projects is not scanned and not failed. Its
-  // previously stored rows, if any, are left exactly as they were.
-  if (projects.length === 0) return empty;
-
-  const client = CLIENTS[provider];
-  const result = await client.scan(projects, await client.token(), signal);
-
-  // No comparable baseline. `prs.length !== sync.prCount` catches both a schema
-  // drop and rows rejected on read — diffing against a short baseline would
-  // fabricate a `left` for every missing row and a `joined` the sync after. A
-  // previous sync that legitimately stored zero rows is NOT a reset.
-  const baselineReset =
-    previous.sync === null ||
-    previous.incomplete ||
-    previous.prs.length !== previous.sync.prCount;
-
-  if (result.failed.length > 0) {
-    // Not committed, and the previous rows stay on screen: a scan that could not
-    // see the whole set cannot say what left it, and showing only the half it did
-    // see would read as "everything else was merged". `changes` is cleared rather
-    // than carried, because the stored changes describe the previous row set and
-    // could otherwise reference a PR absent from the list.
-    return {
-      ...empty,
-      changes: [],
-      failures: result.failed.map(sanitize),
-    };
-  }
-
-  const changes = baselineReset ? [] : diff(previous.prs, result.rows);
-  const sync = store.commit({
-    provider,
-    viewer: result.viewer,
-    repos: projects,
-    prs: result.rows,
-    changes,
-    baselineReset,
-  });
-  return {
-    provider,
-    sync,
-    prs: result.rows,
-    changes,
-    failures: [],
-    baselineReset,
-    at: new Date(sync.at),
-    viewer: result.viewer,
-  };
-}
-
-/** Syncs every configured provider, independently and in parallel. */
-export async function performSync(
-  store: Store,
-  projects: Record<Provider, string[]>,
-  signal?: AbortSignal,
-): Promise<SyncOutcome> {
-  const settled = await Promise.allSettled(
-    PROVIDER_ORDER.map((provider) =>
-      syncProvider(store, provider, projects[provider], signal),
-    ),
-  );
-
-  const byProvider = settled.map((outcome, index) => {
-    const provider = PROVIDER_ORDER[index]!;
-    if (outcome.status === "fulfilled") return outcome.value;
-    // A throw is this provider's failure alone. Its stored rows stay on screen —
-    // dropping them would read as "everything there was merged".
-    const previous = store.read(provider);
-    return {
-      provider,
-      sync: previous.sync,
-      prs: previous.prs,
-      changes: previous.changes,
-      // Server-supplied text reaching the terminal. Sanitised here rather than in
-      // each provider, so the boundary is one place: this also covers subprocess
-      // stderr embedded in a token error, which `glab` styles with ANSI.
-      failures: [sanitize(`${provider}: ${outcome.reason?.message ?? outcome.reason}`)],
-      baselineReset: previous.sync?.baselineReset ?? false,
-      at: previous.sync === null ? null : new Date(previous.sync.at),
-      viewer: previous.sync?.viewer ?? "",
-    } satisfies ProviderOutcome;
-  });
-
-  return collate(byProvider);
-}
-
-/** Reads every provider's stored state without touching the network. */
-export function readAll(store: Store): SyncOutcome {
-  return collate(
-    PROVIDER_ORDER.map((provider) => {
-      const state = store.read(provider);
-      return {
-        provider,
-        sync: state.sync,
-        prs: state.prs,
-        changes: state.changes,
-        failures: state.incomplete
-          ? [`${provider}: stored state was unreadable in part`]
-          : [],
-        baselineReset: state.sync?.baselineReset ?? false,
-        at: state.sync === null ? null : new Date(state.sync.at),
-        viewer: state.sync?.viewer ?? "",
-      } satisfies ProviderOutcome;
-    }),
-  );
-}
-
-function collate(byProvider: ProviderOutcome[]): SyncOutcome {
-  return {
-    byProvider,
-    prs: byProvider.flatMap((p) => p.prs),
-    changes: byProvider.flatMap((p) => p.changes),
-    failures: byProvider.flatMap((p) => p.failures),
-  };
-}
-
-/**
- * The age shown for a mixed board: the **oldest** baseline, never the newest.
- * A fresh half must not hide a stale one.
- */
-export function oldestSync(byProvider: ProviderOutcome[]): Date | null {
-  const times = byProvider
-    .filter((p) => p.prs.length > 0 || p.sync !== null)
-    .map((p) => p.at)
-    .filter((at): at is Date => at !== null);
-  if (times.length === 0) return null;
-  return times.reduce((a, b) => (a.getTime() <= b.getTime() ? a : b));
-}
-
-/** Every viewer that contributed rows, for the header. */
-export function viewersOf(byProvider: ProviderOutcome[]): string {
-  return [...new Set(byProvider.filter((p) => p.viewer !== "").map((p) => p.viewer))].join(
-    " · ",
-  );
-}
 
 export function parseArgs(argv: string[]): {
   command: string | undefined;
   statePath: string | undefined;
+  port: number | undefined;
+  open: boolean;
 } {
   let statePath: string | undefined;
+  let port: number | undefined;
+  let open = true;
   const positional: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
@@ -219,11 +43,27 @@ export function parseArgs(argv: string[]): {
       statePath = value;
       continue;
     }
+    if (arg === "--port") {
+      const value = argv[++i];
+      // Rejected rather than coerced: `--port abc` silently becoming NaN and
+      // then vite's default is a worse outcome than refusing to start.
+      if (value === undefined || !/^\d+$/.test(value)) {
+        throw new Error("--port needs a number");
+      }
+      const parsed = Number(value);
+      if (parsed < 1 || parsed > 65535) throw new Error("--port is out of range");
+      port = parsed;
+      continue;
+    }
+    if (arg === "--no-open") {
+      open = false;
+      continue;
+    }
     // Read positionally, the subcommand was invisible behind a preceding flag:
     // `prq --state x sync` silently opened the dashboard instead of syncing.
     if (!arg.startsWith("-")) positional.push(arg);
   }
-  return { command: positional[0], statePath };
+  return { command: positional[0], statePath, port, open };
 }
 
 async function initConfig(): Promise<void> {
@@ -237,12 +77,94 @@ async function initConfig(): Promise<void> {
   process.stdout.write(`wrote ${path}\n`);
 }
 
+const DEFAULT_WEB_PORT = 4177;
+
+/**
+ * Boots the browser dashboard.
+ *
+ * The store is deliberately **not** opened here: the web server opens it per
+ * request, and holding a second handle open for the life of the dev server would
+ * leave WAL sidecars behind for no benefit.
+ */
+async function runWeb(
+  override: string | undefined,
+  port: number,
+  openBrowser: boolean,
+): Promise<void> {
+  const repo = join(import.meta.dir, "..");
+  const config = join(repo, "web", "vite.config.ts");
+  const vite = join(repo, "node_modules", "vite", "bin", "vite.js");
+  for (const required of [config, vite]) {
+    if (!(await Bun.file(required).exists())) {
+      throw new Error(
+        `missing ${required} — 'prq web' needs the source tree and its installed ` +
+          "dependencies, so it does not work from the compiled binary",
+      );
+    }
+  }
+
+  const loaded = await loadConfig();
+  const state = resolveStorePath(override ?? loaded.statePath);
+  const url = `http://localhost:${port}`;
+  process.stdout.write(`prq web — ${url}\nstate:  ${state}\n`);
+
+  // `--bun` is load-bearing, and vite's own binary is invoked directly rather
+  // than through a package script. Vite's bin carries `#!/usr/bin/env node`, so
+  // anything that honours the shebang hands the dev server and all SSR to Node,
+  // where every server function dies on `bun:sqlite` with "Received protocol
+  // 'bun:'" — silently, right up until the database is touched.
+  //
+  // Unlike `open` and `pbcopy`, this child gets the full environment: it *is* the
+  // application, and syncing from it shells out to `gh` and `glab`, which need
+  // HOME and their own configuration.
+  const server = Bun.spawn(
+    ["bun", "--bun", vite, "dev", "--config", config, "--port", String(port)],
+    {
+      cwd: repo,
+      env: { ...process.env, PRQ_STATE: state },
+      stdout: "inherit",
+      stderr: "inherit",
+    },
+  );
+
+  if (openBrowser) {
+    // Waits for the port rather than guessing: opening a browser at a dead
+    // address shows an error page the user then has to reload by hand.
+    const ready = await waitForPort(port, server);
+    if (ready) {
+      Bun.spawn(["open", "--", url], { env: { PATH: process.env.PATH ?? "" } });
+    }
+  }
+
+  const code = await server.exited;
+  if (code !== 0) throw new SilentFailure();
+}
+
+/** Resolves true once the port accepts a connection, false if the server died. */
+async function waitForPort(port: number, server: Bun.Subprocess): Promise<boolean> {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if (server.exitCode !== null) return false;
+    try {
+      const socket = await Bun.connect({
+        hostname: "127.0.0.1",
+        port,
+        socket: { data() {} },
+      });
+      socket.end();
+      return true;
+    } catch {
+      await Bun.sleep(100);
+    }
+  }
+  return false;
+}
+
 /** Exits non-zero without printing again — the message is already out. */
 class SilentFailure extends Error {}
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
-  const { command, statePath: override } = parseArgs(args);
+  const { command, statePath: override, port, open } = parseArgs(args);
 
   if (args.includes("--help") || args.includes("-h")) {
     let effective = storePath();
@@ -255,9 +177,12 @@ async function main(): Promise<void> {
     process.stdout.write(
       "prq — open pull and merge requests that concern you\n\n" +
         "  prq            open the dashboard on the last synced state\n" +
+        "  prq web        open the same board in a browser\n" +
         "  prq sync       sync every configured provider, then report what changed\n" +
         "  prq init       write an example config\n" +
         "  --state <path> use this state database instead of the configured one\n" +
+        "  --port <n>     port for `web` (default 4177)\n" +
+        "  --no-open      do not launch a browser for `web`\n" +
         `\nconfig: ${configPath()}\nstate:  ${effective}\n`,
     );
     return;
@@ -265,6 +190,11 @@ async function main(): Promise<void> {
 
   if (command === "init") {
     await initConfig();
+    return;
+  }
+
+  if (command === "web") {
+    await runWeb(override, port ?? DEFAULT_WEB_PORT, open);
     return;
   }
 

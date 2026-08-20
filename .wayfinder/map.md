@@ -219,6 +219,19 @@ both belong here rather than in a ticket:
   `statePath` is incompatible with a global command**, because it resolves against
   the caller's directory and silently creates an empty database there. Absolute
   paths only, once the tool is on `PATH`.
+- **A second front-end, in the browser, over the same store** (2026-08-20). React
+  and TanStack Start on `127.0.0.1`, not hosted: auth comes from spawning `gh` and
+  `glab`, and the store is `bun:sqlite`, so a cloud runtime has neither. Hosting
+  would mean a rewritten transport, a hosted database, stored tokens and a login —
+  the front-end would be the small part. Locally, reuse is near-total, because the
+  UI seam was already real: `domain.ts` owns the bucket rules and `render.ts` only
+  formats strings, so React replaces the formatters and duplicates no logic.
+  Two findings worth keeping. **`bun run dev` does not run Start under Bun** —
+  Vite's bin is `#!/usr/bin/env node`, so SSR lands on Node and `bun:sqlite` throws
+  `Received protocol 'bun:'`; `bun --bun run dev` fixes it, and the failure is
+  silent right up until the database is touched. And the **web front-end preserves
+  the diff across a reload**, which the TUI cannot: changes are already on disk, so
+  a refresh re-reads them instead of losing them.
 
 ## Not yet specified
 

@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "target": "ES2022",
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "types": ["bun", "vite/client"],
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "noUncheckedIndexedAccess": true,
+    "allowImportingTsExtensions": true,
+    // Deliberately absent: `verbatimModuleSyntax`. The root tsconfig enables it,
+    // but the Start docs warn it "can result in server bundles leaking into
+    // client bundles" — and this app imports a bun:sqlite-backed store.
+    "resolveJsonModule": true
+  },
+  "include": ["src", "vite.config.ts", "../src/**/*.ts"]
+}

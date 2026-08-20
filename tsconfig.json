@@ -26,5 +26,10 @@
     "noUnusedLocals": false,
     "noUnusedParameters": false,
     "noPropertyAccessFromIndexSignature": false
-  }
+  },
+
+  // `web/` is a separate project: it needs DOM libs and React types, and must
+  // NOT inherit `verbatimModuleSyntax`, which the TanStack Start docs warn can
+  // leak server bundles into client bundles. It carries its own tsconfig.
+  "exclude": ["web", "dist", "node_modules"]
 }

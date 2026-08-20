@@ -2,6 +2,13 @@ banks/
 node_modules/
 dist/
 
+# Vite and TanStack Start build output. `web/src/routeTree.gen.ts` is generated
+# too, but it IS committed: `bun run check` typechecks the web app, and without
+# the route tree a fresh clone fails to typecheck before it has ever run.
+.tanstack/
+.output/
+web/.vite/
+
 # The state database holds private repo names and PR titles. It is deliberately
 # allowed to live inside the project via `statePath`, so it must never be
 # committed — including SQLite's WAL sidecars.

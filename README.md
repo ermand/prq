@@ -77,7 +77,8 @@ After `bun unlink` your shell may still run the old path from its command hash, 
 ## Running
 
 ```bash
-prq              # open the dashboard
+prq              # open the dashboard in the terminal
+prq web          # open the same board in a browser
 prq sync         # sync now, then report what changed
 ```
 
@@ -85,6 +86,7 @@ Without installing, the same two from inside the checkout:
 
 ```bash
 bun start        # open the dashboard
+bun run web      # open the browser dashboard
 bun run sync     # sync now, from the shell
 ```
 
@@ -127,6 +129,41 @@ ermand · 29 PRs · 5 repos · 2h ago · 13 changed · 5 gone
   reported. The next sync will report properly.
 - **`INCOMPLETE — not committed`** — one half of the scan failed. The result is
   shown but deliberately not stored, so the baseline survives untouched.
+
+## In the browser
+
+```bash
+prq web                       # http://localhost:4177, opens a browser
+prq web --port 8080           # somewhere else
+prq web --no-open             # do not launch a browser
+prq web --state /tmp/scratch.db
+```
+
+Same store, same buckets, same rules — `domain.ts` owns the bucket logic, so the
+two front-ends cannot disagree about where a PR belongs. React and TanStack Start,
+served from `127.0.0.1` only.
+
+It is local by necessity, not modesty. Authentication comes from spawning `gh` and
+`glab`, and the store is `bun:sqlite`; a hosted deployment has neither, so it
+would need a rewritten transport, a hosted database, stored tokens and a login.
+
+What the browser adds is space. Selecting a row opens a panel with the reviewers,
+the stack, the base branch and head, whether your block is stale, and the full
+change history for that row — all of it already in the store, none of it costing a
+request. The grouping, the filter and the selected row live in the URL, so a
+reload or a back button restores the view the terminal forgets on exit.
+
+**Sync is still explicit.** A page load calls a read-only server function; it
+never touches the network. The sync button is the only thing that does, and it is
+the only write path in the app — every other outbound action is an anchor to the
+forge, so read-only is structural rather than a matter of discipline.
+
+Reloading is safe, and slightly better than the TUI: changes are persisted, so a
+refresh re-reads the diff instead of losing it.
+
+One caveat worth knowing. If a scan fails, nothing is committed — so those
+failures exist only in the sync's reply, and the banner reporting them is cleared
+by a reload. The CLI behaves the same way, having printed them once.
 
 ## The seven buckets
 
@@ -193,8 +230,8 @@ bun src/cli.ts --help                      # shows the paths actually in force
 ## Development
 
 ```bash
-bun run check       # typecheck + full test suite
-bun run typecheck
+bun run check       # typecheck (both projects) + full test suite
+bun run typecheck   # root tsconfig, then web/tsconfig
 bun test
 bun run build       # standalone binary at dist/prq
 ```
@@ -215,7 +252,9 @@ OpenTUI's native core, not the application.
 | `src/store.ts` | SQLite state, per-provider baselines, migration, atomic commit |
 | `src/render.ts` | rows, buckets and the status line, all pure |
 | `src/tui.ts` | the OpenTUI dashboard |
-| `src/cli.ts` | entry point and sync semantics |
+| `src/engine.ts` | read the store, or sync and diff — no renderer imported |
+| `src/cli.ts` | entry point, argument parsing, `prq web` |
+| `web/` | the React dashboard: routes, components, two server functions |
 | `CONTEXT.md` | domain glossary — read this before changing the model |
 | `.wayfinder/` | the design map: decisions made, and what is still open |
 
