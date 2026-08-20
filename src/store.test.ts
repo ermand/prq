@@ -393,7 +393,7 @@ describe("migration", () => {
 
     const store = await Store.open(path);
     // @ts-expect-error — reading the private handle to assert the pragma.
-    expect(store.db.query("PRAGMA user_version").get().user_version).toBe(4);
+    expect(store.db.query("PRAGMA user_version").get().user_version).toBe(SCHEMA_VERSION);
     // @ts-expect-error — reading the private handle to assert the new tables.
     const tables: { name: string }[] = store.db
       .query(
@@ -415,6 +415,119 @@ describe("migration", () => {
     // imported once.
     expect(store.isSeeded()).toBe(false);
     expect(store.projects()).toEqual([]);
+    store.close();
+    await wipe();
+  });
+
+  test("a v4 database gains the activity marks and keeps every row active", async () => {
+    // v5 only *added* columns, both `NOT NULL DEFAULT 1`. Nothing already stored
+    // changed shape, so a v4 file keeps its baseline, its history, its census and
+    // its tracking — and every project and person reads as active, which is the
+    // only safe reading: the mark is a human decision and no migration can infer
+    // one.
+    await wipe();
+    const v4 = new Database(path, { create: true });
+    v4.run("PRAGMA journal_mode = WAL");
+    v4.run(
+      "CREATE TABLE sync (id INTEGER PRIMARY KEY AUTOINCREMENT, provider TEXT NOT NULL, at TEXT NOT NULL, viewer TEXT NOT NULL, repos TEXT NOT NULL, pr_count INTEGER NOT NULL, baseline_reset INTEGER NOT NULL DEFAULT 0)",
+    );
+    v4.run(
+      "CREATE TABLE pr (id TEXT PRIMARY KEY, provider TEXT NOT NULL, synced INTEGER NOT NULL, payload TEXT NOT NULL)",
+    );
+    v4.run(
+      "CREATE TABLE change (sync_id INTEGER NOT NULL REFERENCES sync(id) ON DELETE CASCADE, pr_id TEXT NOT NULL, kind TEXT NOT NULL, from_v TEXT, to_v TEXT, PRIMARY KEY (sync_id, pr_id, kind))",
+    );
+    v4.run(
+      "CREATE TABLE census_pr (provider TEXT NOT NULL, repo TEXT NOT NULL, number INTEGER NOT NULL, state TEXT NOT NULL, draft INTEGER NOT NULL, title TEXT NOT NULL, url TEXT, author TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, merged_at TEXT, closed_at TEXT, additions INTEGER NOT NULL, deletions INTEGER NOT NULL, files INTEGER NOT NULL, merged_by TEXT NOT NULL, PRIMARY KEY (provider, repo, number))",
+    );
+    v4.run(
+      "CREATE TABLE census_review (provider TEXT NOT NULL, repo TEXT NOT NULL, number INTEGER NOT NULL, reviewer TEXT NOT NULL, act TEXT NOT NULL, at TEXT)",
+    );
+    v4.run(
+      "CREATE TABLE census_run (provider TEXT NOT NULL, repo TEXT NOT NULL, at TEXT NOT NULL, prs INTEGER NOT NULL, reviews INTEGER NOT NULL, failed TEXT, truncated INTEGER NOT NULL, PRIMARY KEY (provider, repo))",
+    );
+    v4.run(
+      "CREATE TABLE contributor (provider TEXT NOT NULL, username TEXT NOT NULL, first_seen TEXT NOT NULL, last_seen TEXT NOT NULL, prs INTEGER NOT NULL, reviews INTEGER NOT NULL, PRIMARY KEY (provider, username))",
+    );
+    // The v4 tracking tables: no `active` column anywhere.
+    v4.run(
+      "CREATE TABLE project (provider TEXT NOT NULL, path TEXT NOT NULL, added_at TEXT NOT NULL, PRIMARY KEY (provider, path))",
+    );
+    v4.run(
+      "CREATE TABLE person (id TEXT NOT NULL PRIMARY KEY, label TEXT NOT NULL, updated_at TEXT NOT NULL)",
+    );
+    v4.run(
+      "CREATE TABLE person_alias (provider TEXT NOT NULL, username TEXT NOT NULL, person_id TEXT NOT NULL, PRIMARY KEY (provider, username))",
+    );
+    v4.run("CREATE TABLE meta (key TEXT NOT NULL PRIMARY KEY, value TEXT NOT NULL)");
+
+    const kept = pr();
+    v4.run(
+      "INSERT INTO sync (provider, at, viewer, repos, pr_count, baseline_reset) VALUES (?, ?, ?, ?, ?, 0)",
+      ["github", "2026-01-01T00:00:00Z", "ermand", '["org/repo"]', 1],
+    );
+    v4.run("INSERT INTO pr (id, provider, synced, payload) VALUES (?, ?, ?, ?)", [
+      kept.id,
+      "github",
+      1,
+      JSON.stringify(kept),
+    ]);
+    v4.run("INSERT INTO change (sync_id, pr_id, kind) VALUES (1, ?, 'joined')", [kept.id]);
+    v4.run(
+      "INSERT INTO census_pr (provider, repo, number, state, draft, title, url, author, created_at, updated_at, merged_at, closed_at, additions, deletions, files, merged_by) VALUES ('github', 'org/repo', 1, 'merged', 0, 'A change', NULL, 'alice', '2026-01-01T00:00:00.000Z', '2026-01-05T00:00:00.000Z', NULL, NULL, 1, 1, 1, '')",
+    );
+    v4.run(
+      "INSERT INTO census_review (provider, repo, number, reviewer, act, at) VALUES ('github', 'org/repo', 1, 'bob', 'approved', NULL)",
+    );
+    v4.run(
+      "INSERT INTO census_run (provider, repo, at, prs, reviews, failed, truncated) VALUES ('github', 'org/repo', '2026-01-05T00:00:00.000Z', 1, 1, NULL, 0)",
+    );
+    v4.run(
+      "INSERT INTO project (provider, path, added_at) VALUES ('github', 'org/repo', '2026-01-01T00:00:00.000Z')",
+    );
+    v4.run(
+      "INSERT INTO person (id, label, updated_at) VALUES ('github:kaziu', 'Kristi Aziu', '2026-01-01T00:00:00.000Z')",
+    );
+    v4.run(
+      "INSERT INTO person_alias (provider, username, person_id) VALUES ('github', 'kaziu', 'github:kaziu')",
+    );
+    v4.run("INSERT INTO meta (key, value) VALUES ('tracking.seeded', '2026-01-01T00:00:00.000Z')");
+    v4.run("PRAGMA user_version = 4");
+    v4.close();
+
+    const store = await Store.open(path);
+    // @ts-expect-error — reading the private handle to assert the pragma.
+    expect(store.db.query("PRAGMA user_version").get().user_version).toBe(SCHEMA_VERSION);
+    expect(SCHEMA_VERSION).toBe(5);
+
+    // Nothing stored changed shape, so the baseline is still diffable.
+    const state = store.read("github");
+    expect(state.incomplete).toBe(false);
+    expect(state.prs).toHaveLength(1);
+    expect(state.changes).toEqual([{ prId: kept.id, kind: "joined", from: null, to: null }]);
+    expect(store.censusPrs()).toHaveLength(1);
+    expect(store.censusReviews()).toHaveLength(1);
+    expect(store.censusRuns()).toHaveLength(1);
+
+    // The tracking rows survive, marked active, and the seed marker with them.
+    expect(store.isSeeded()).toBe(true);
+    expect(store.projects()).toEqual([
+      {
+        provider: "github",
+        path: "org/repo",
+        addedAt: "2026-01-01T00:00:00.000Z",
+        active: true,
+      },
+    ]);
+    expect(store.projectsByProvider()).toEqual({ github: ["org/repo"], gitlab: [] });
+    expect(store.personRules()).toEqual([
+      {
+        id: "github:kaziu",
+        label: "Kristi Aziu",
+        aliases: [{ provider: "github", username: "kaziu" }],
+        active: true,
+      },
+    ]);
     store.close();
     await wipe();
   });
@@ -997,8 +1110,13 @@ describe("tracked projects", () => {
     // A duplicate is a slip, not an error: the caller is a keystroke.
     expect(store.addProject("github", "org/repo", LATER)).toBe(false);
     expect(store.projects()).toEqual([
-      { provider: "github", path: "org/repo", addedAt: AT.toISOString() },
-      { provider: "gitlab", path: "group/sub/project", addedAt: LATER.toISOString() },
+      { provider: "github", path: "org/repo", addedAt: AT.toISOString(), active: true },
+      {
+        provider: "gitlab",
+        path: "group/sub/project",
+        addedAt: LATER.toISOString(),
+        active: true,
+      },
     ]);
 
     expect(store.removeProject("github", "org/repo")).toBe(true);
@@ -1074,8 +1192,8 @@ describe("seeding from a config file", () => {
     expect(store.seedTracking(projects, [], AT)).toBe(true);
     expect(store.isSeeded()).toBe(true);
     expect(store.projects()).toEqual([
-      { provider: "github", path: "org/repo", addedAt: AT.toISOString() },
-      { provider: "gitlab", path: "group/project", addedAt: AT.toISOString() },
+      { provider: "github", path: "org/repo", addedAt: AT.toISOString(), active: true },
+      { provider: "gitlab", path: "group/project", addedAt: AT.toISOString(), active: true },
     ]);
     store.close();
   });
@@ -1117,6 +1235,7 @@ describe("seeding from a config file", () => {
           { provider: "github", username: "kaziu" },
           { provider: "gitlab", username: "kristi" },
         ],
+        active: true,
       },
     ]);
     store.close();
@@ -1146,6 +1265,7 @@ describe("stored people", () => {
         id: "github:kaziu",
         label: "Kristi Aziu",
         aliases: [{ provider: "github", username: "kaziu" }],
+        active: true,
       },
     ]);
     store.close();
@@ -1176,7 +1296,7 @@ describe("stored people", () => {
     const store = await mem();
     store.renamePerson("kristi-aziu", "Kristi Aziu", AT);
     expect(store.personRules()).toEqual([
-      { id: "kristi-aziu", label: "Kristi Aziu", aliases: [] },
+      { id: "kristi-aziu", label: "Kristi Aziu", aliases: [], active: true },
     ]);
     store.close();
   });
@@ -1215,6 +1335,7 @@ describe("stored people", () => {
           { provider: "github", username: "kaziu" },
           { provider: "gitlab", username: "kristi" },
         ],
+        active: true,
       },
     ]);
     store.close();
@@ -1240,6 +1361,7 @@ describe("stored people", () => {
           { provider: "github", username: "kaziu" },
           { provider: "gitlab", username: "kristi" },
         ],
+        active: true,
       },
     ]);
     store.close();
@@ -1266,6 +1388,7 @@ describe("stored people", () => {
         id: "github:kaziu",
         label: "Kristi Aziu",
         aliases: [{ provider: "github", username: "kaziu" }],
+        active: true,
       },
     ]);
 
@@ -1273,7 +1396,7 @@ describe("stored people", () => {
     // is still a name somebody typed, and dropping it would make it vanish.
     expect(store.splitAlias("github", "kaziu")).toBe(true);
     expect(store.personRules()).toEqual([
-      { id: "github:kaziu", label: "Kristi Aziu", aliases: [] },
+      { id: "github:kaziu", label: "Kristi Aziu", aliases: [], active: true },
     ]);
     store.close();
   });
@@ -1362,6 +1485,201 @@ describe("merging into an identity that was never named", () => {
       rules,
     );
     expect(people).toHaveLength(1);
+    store.close();
+  });
+});
+
+/** Rows the file holds in a table no reader exposes directly. */
+const storedRows = (store: Store, table: "person" | "person_alias"): number =>
+  // @ts-expect-error — reaching the private handle: materialising the row is the
+  // property under test, and `personRules` cannot tell a stored row from the
+  // fallback it synthesises for an orphaned alias.
+  store.db.query(`SELECT count(*) AS n FROM ${table}`).get().n;
+
+describe("a project's activity mark", () => {
+  test("a newly tracked project is active", async () => {
+    const store = await mem();
+    store.addProject("github", "org/repo", AT);
+    expect(store.projects()[0]!.active).toBe(true);
+    expect(store.projectsByProvider()).toEqual({ github: ["org/repo"], gitlab: [] });
+    store.close();
+  });
+
+  test("marking one inactive stops it being fetched and nothing else", async () => {
+    // Rule 1, and both halves of it matter. The project stays on the page with
+    // its mark, because its stored rows still count everywhere; it drops out of
+    // the one list a fetch consumes, which is the entire behavioural difference.
+    const store = await mem();
+    store.addProject("github", "org/repo", AT);
+    store.addProject("github", "org/other", AT);
+
+    expect(store.setProjectActive("github", "org/repo", false)).toBe(true);
+    expect(store.projects()).toEqual([
+      { provider: "github", path: "org/other", addedAt: AT.toISOString(), active: true },
+      { provider: "github", path: "org/repo", addedAt: AT.toISOString(), active: false },
+    ]);
+    expect(store.projectsByProvider()).toEqual({ github: ["org/other"], gitlab: [] });
+
+    // And it comes back to the fetch list on being marked active again.
+    expect(store.setProjectActive("github", "org/repo", true)).toBe(true);
+    expect(store.projects().map((p) => p.active)).toEqual([true, true]);
+    expect(store.projectsByProvider()).toEqual({
+      github: ["org/other", "org/repo"],
+      gitlab: [],
+    });
+    store.close();
+  });
+
+  test("a project nobody tracks cannot be marked", async () => {
+    // Untracked is not inactive: there is no row to carry the mark, and inventing
+    // one would track a project by marking it.
+    const store = await mem();
+    expect(store.setProjectActive("github", "org/repo", false)).toBe(false);
+    expect(store.projects()).toEqual([]);
+
+    store.addProject("github", "org/repo", AT);
+    store.removeProject("github", "org/repo");
+    expect(store.setProjectActive("github", "org/repo", false)).toBe(false);
+    store.close();
+  });
+
+  test("an inactive project's census rows are still read back", async () => {
+    // Rule 2. History is a record: the read paths are unfiltered and only the
+    // fetching changes. Dropping the rows instead rewrote a project's history
+    // every time it went dormant.
+    const store = await mem();
+    store.addProject("github", "org/repo", AT);
+    store.writeCensus(census(), AT);
+    expect(store.setProjectActive("github", "org/repo", false)).toBe(true);
+
+    expect(store.censusPrs()).toHaveLength(1);
+    expect(store.censusPrs({ repo: "org/repo" }).map((p) => p.author)).toEqual(["alice"]);
+    expect(store.censusReviews({ repo: "org/repo" })).toHaveLength(1);
+    expect(store.censusRuns().map((r) => r.repo)).toEqual(["org/repo"]);
+    expect(store.contributors().map((c) => c.username)).toEqual(["alice", "bob"]);
+    store.close();
+  });
+
+  test("purging spares an inactive project, because it is still tracked", async () => {
+    // The distinction the whole design rests on. Inactive keeps the history and
+    // untracked hides it, so only the second is an orphan the purge may reclaim.
+    const store = await mem();
+    store.addProject("github", "org/repo", AT);
+    store.addProject("github", "org/other", AT);
+    store.writeCensus(census(), AT);
+    store.writeCensus(
+      census({
+        repo: "org/other",
+        prs: [censusPr({ repo: "org/other", number: 7, author: "carol" })],
+        reviews: [censusReview({ repo: "org/other", number: 7, reviewer: "alice" })],
+      }),
+      AT,
+    );
+    expect(rowsOnDisk(store, "census_pr")).toBe(2);
+
+    expect(store.setProjectActive("github", "org/repo", false)).toBe(true);
+    expect(store.purgeUntracked()).toBe(0);
+    expect(rowsOnDisk(store, "census_pr")).toBe(2);
+    expect(rowsOnDisk(store, "census_review")).toBe(2);
+
+    // Untracking the same project is what makes its rows purgeable.
+    store.removeProject("github", "org/repo");
+    expect(store.purgeUntracked()).toBe(2);
+    expect(rowsOnDisk(store, "census_pr")).toBe(1);
+    store.close();
+  });
+});
+
+describe("a person's activity mark", () => {
+  test("marking a never-seen identity creates the person and its account", async () => {
+    // Rule 3, and the same materialisation `renamePerson` does: the roster offers
+    // census-derived identities, so an identity nobody has ever named must still
+    // be markable — and without the alias row the mark would detach from the
+    // account on the next merge or untracking.
+    const store = await mem();
+    store.setPersonActive("github:kaziu", false, AT);
+
+    expect(storedRows(store, "person")).toBe(1);
+    expect(storedRows(store, "person_alias")).toBe(1);
+    expect(store.personRules()).toEqual([
+      {
+        id: "github:kaziu",
+        // Nobody typed a name, so the label falls back to the login.
+        label: "kaziu",
+        aliases: [{ provider: "github", username: "kaziu" }],
+        active: false,
+      },
+    ]);
+    store.close();
+  });
+
+  test("the mark reaches resolvePeople, and an unclaimed identity stays active", async () => {
+    const store = await mem();
+    store.setPersonActive("github:kaziu", false, AT);
+    const { people } = resolvePeople(
+      [
+        { provider: "github", username: "kaziu" },
+        { provider: "github", username: "alice" },
+      ],
+      store.personRules(),
+    );
+    expect(people.find((p) => p.id === "github:kaziu")?.active).toBe(false);
+    // Nobody has stored an opinion about alice, and no opinion means active.
+    expect(people.find((p) => p.id === "github:alice")?.active).toBe(true);
+    store.close();
+  });
+
+  test("marking active again flips it back", async () => {
+    const store = await mem();
+    store.setPersonActive("github:kaziu", false, AT);
+    expect(store.personRules()[0]!.active).toBe(false);
+
+    store.setPersonActive("github:kaziu", true, LATER);
+    expect(store.personRules()[0]!.active).toBe(true);
+    expect(storedRows(store, "person")).toBe(1);
+    store.close();
+  });
+
+  test("marking somebody does not disturb the name they were given", async () => {
+    // The upsert deliberately touches `active` only: this is not a rename, and
+    // being marked inactive must not reduce a named person to their login.
+    const store = await mem();
+    store.renamePerson("github:kaziu", "Kristi Aziu", AT);
+    store.setPersonActive("github:kaziu", false, LATER);
+
+    expect(store.personRules()).toEqual([
+      {
+        id: "github:kaziu",
+        label: "Kristi Aziu",
+        aliases: [{ provider: "github", username: "kaziu" }],
+        active: false,
+      },
+    ]);
+
+    // And renaming somebody inactive does not quietly reactivate them either.
+    store.renamePerson("github:kaziu", "K. Aziu", LATER);
+    expect(store.personRules()[0]!.label).toBe("K. Aziu");
+    expect(store.personRules()[0]!.active).toBe(false);
+    store.close();
+  });
+
+  test("an inactive person's pull requests still count", async () => {
+    // Rule 2 again, on the other axis. Somebody leaving does not un-write their
+    // code; driving the alternative erased 11 real pull requests from a profile.
+    const store = await mem();
+    store.addProject("github", "org/repo", AT);
+    store.writeCensus(census(), AT);
+    store.setPersonActive("github:alice", false, LATER);
+
+    expect(store.censusPrs({ author: "alice" })).toHaveLength(1);
+    expect(store.contributors().find((c) => c.username === "alice")?.prs).toBe(1);
+    store.close();
+  });
+
+  test("a person needs an id to be marked", async () => {
+    const store = await mem();
+    expect(() => store.setPersonActive("", false, AT)).toThrow(/needs an id/);
+    expect(store.personRules()).toEqual([]);
     store.close();
   });
 });

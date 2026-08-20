@@ -42,13 +42,13 @@ import {
 } from "./domain";
 
 /** Bumped whenever the schema or the shape of a stored PR changes. */
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 /**
  * The oldest schema version whose stored `pr` payloads this build can still
- * read. v3 and v4 only *added* tables, so a v2 database keeps its baseline and
- * the next sync diffs against it instead of resetting — dropping it would cost
- * the driver a change report for nothing.
+ * read. v3 and v4 only *added* tables, and v5 only *added* columns, so a v2
+ * database keeps its baseline and the next sync diffs against it instead of
+ * resetting — dropping it would cost the driver a change report for nothing.
  */
 const PAYLOAD_VERSION = 2;
 
@@ -169,10 +169,17 @@ CREATE TABLE IF NOT EXISTS contributor (
 -- tracked, absence means neither scanned nor shown. Census rows outlive a row
 -- here on purpose (see removeProject), so this table is the only authority on
 -- what a page may display.
+--
+-- v5 added the active column. It means exactly one thing: an inactive project
+-- is not fetched — sync and census skip it — and every read path stays blind to
+-- the column. Untracked and inactive are therefore different states, which was
+-- settled by driving them side by side: inactive left one contributor with his
+-- one stored row, untracking left him with none.
 CREATE TABLE IF NOT EXISTS project (
   provider TEXT NOT NULL,
   path     TEXT NOT NULL,
   added_at TEXT NOT NULL,
+  active   INTEGER NOT NULL DEFAULT 1,
   PRIMARY KEY (provider, path)
 );
 
@@ -180,10 +187,18 @@ CREATE TABLE IF NOT EXISTS project (
 -- other identity the census sees still stands alone under provider:username,
 -- which is the id the roster and its URLs already used — so materialising a
 -- person moves nothing.
+--
+-- v5 added the active column, which hides somebody from the roster by default
+-- and changes nothing else: their pull requests still count toward every
+-- project's numbers, because the work is a matter of record and somebody
+-- leaving does not un-write their code. Driven by hand; the alternative dropped
+-- 11 real pull requests from a profile. Deliberately not folded into the bot
+-- flag: a bot is a permanent property of an account, inactive is a decision.
 CREATE TABLE IF NOT EXISTS person (
   id         TEXT NOT NULL PRIMARY KEY,
   label      TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  active     INTEGER NOT NULL DEFAULT 1
 );
 
 -- Which forge account belongs to which person. Keyed on the identity, so one
@@ -295,17 +310,27 @@ export interface TrackedProject {
   path: string;
   /** ISO 8601, from the caller's clock — the store never reads one. */
   addedAt: string;
+  /**
+   * False when the project has been marked inactive, which means it is not
+   * fetched and nothing more. Its stored rows still count everywhere, so the
+   * pages list it with the mark rather than hiding it — that is
+   * `projectsByProvider`'s job, and the split between the two is the whole
+   * mechanism.
+   */
+  active: boolean;
 }
 
 interface ProjectRow {
   provider: string;
   path: string;
   added_at: string;
+  active: number;
 }
 
 interface PersonRow {
   id: string;
   label: string;
+  active: number;
 }
 
 interface AliasRow {
@@ -373,6 +398,19 @@ const text = (raw: unknown): string => (typeof raw === "string" ? sanitize(raw) 
 
 const stamp = (raw: unknown): string | null =>
   typeof raw === "string" && raw !== "" ? sanitize(raw) : null;
+
+/**
+ * A stored activity mark, on the way out.
+ *
+ * Only an explicit 0 is inactive. Deliberately not the `=== 1` this file uses
+ * for every other boolean column: those default to false, this one defaults to
+ * true. The column carries DEFAULT 1, every row written before v5 reads as
+ * active, and `resolvePeople` already spells the same rule — a missing flag must
+ * not read as "hidden". Erring the other way would let one unreadable byte stop
+ * a project being fetched, and since inactivity changes nothing a page renders,
+ * that failure would leave no trace anywhere.
+ */
+const mark = (raw: unknown): boolean => raw !== 0;
 
 const isProvider = (raw: unknown): raw is Provider => raw === "github" || raw === "gitlab";
 
@@ -620,6 +658,19 @@ export class Store {
           this.db.run(
             `ALTER TABLE ${table} ADD COLUMN provider TEXT NOT NULL DEFAULT 'github'`,
           );
+        }
+      }
+    }
+
+    // v4 predates the activity mark. Additive and defaulted, so a v4 file keeps
+    // every row and every one of them reads as active — the only safe reading,
+    // since the mark is a human decision and no migration can infer one. The
+    // `hasColumn` guard is what lets this run after `TABLES` has already created
+    // the tables from scratch for a v3 file.
+    if (!fresh && version < 5) {
+      for (const table of ["project", "person"]) {
+        if (!this.hasColumn(table, "active")) {
+          this.db.run(`ALTER TABLE ${table} ADD COLUMN active INTEGER NOT NULL DEFAULT 1`);
         }
       }
     }
@@ -1043,25 +1094,45 @@ export class Store {
       .get(provider)!.n;
   }
 
-  /** Every tracked project, ordered as the projects page shows them. */
+  /**
+   * Every tracked project, active or not, ordered as the projects page shows
+   * them. The mark comes out with the row rather than filtering it: an inactive
+   * project's stored rows still count everywhere, so hiding the project would
+   * hide history that the pages go on displaying.
+   */
   projects(): TrackedProject[] {
     return this.db
       .query<ProjectRow, []>("SELECT * FROM project ORDER BY provider, path")
       .all()
       .flatMap((row) =>
         isProvider(row.provider)
-          ? [{ provider: row.provider, path: text(row.path), addedAt: text(row.added_at) }]
+          ? [
+              {
+                provider: row.provider,
+                path: text(row.path),
+                addedAt: text(row.added_at),
+                active: mark(row.active),
+              },
+            ]
           : [],
       );
   }
 
   /**
-   * The tracked list in the shape `performSync` and `performCensus` take, so the
-   * database drops straight into the place the config lists used to fill.
+   * The **active** tracked list, in the shape `performSync` and `performCensus`
+   * take, so the database drops straight into the place the config lists used to
+   * fill.
+   *
+   * Active-only is the entire behavioural difference an inactive project makes:
+   * this is the one list a fetch consumes, so dropping a project from it stops
+   * the fetch and touches nothing else. Every read path — `projects`,
+   * `censusPrs`, `purgeUntracked` — stays blind to the mark on purpose.
    */
   projectsByProvider(): Record<Provider, string[]> {
     const by: Record<Provider, string[]> = { github: [], gitlab: [] };
-    for (const project of this.projects()) by[project.provider].push(project.path);
+    for (const project of this.projects()) {
+      if (project.active) by[project.provider].push(project.path);
+    }
     return by;
   }
 
@@ -1117,6 +1188,34 @@ export class Store {
   }
 
   /**
+   * Marks a tracked project active or inactive. False when it is not tracked at
+   * all, which is a different state and not one this can reach: untracking hides
+   * a project's history, inactivity keeps it. Driven side by side — marking
+   * inactive left a contributor's one stored pull request on his profile, and
+   * untracking the same project left him with nothing.
+   *
+   * Census rows are never touched. The mark reaches exactly one caller,
+   * `projectsByProvider`, and therefore does exactly one thing: the project
+   * stops being fetched.
+   */
+  setProjectActive(provider: Provider, path: string, active: boolean): boolean {
+    const run = this.db.transaction(() => {
+      const existing = this.db
+        .query<
+          { n: number },
+          [string, string]
+        >("SELECT count(*) AS n FROM project WHERE provider = ? AND path = ?")
+        .get(provider, path)!.n;
+      if (existing === 0) return false;
+      this.db
+        .query("UPDATE project SET active = ? WHERE provider = ? AND path = ?")
+        .run(active ? 1 : 0, provider, path);
+      return true;
+    });
+    return run();
+  }
+
+  /**
    * Drops the census history of every untracked project and returns how many
    * rows went. The counterpart to `removeProject` keeping them: this is the only
    * way to reclaim the space, and it is never implicit.
@@ -1124,6 +1223,11 @@ export class Store {
    * Counts `census_pr` and `census_review` — the history itself. The matching
    * `census_run` rows go too, being a record of a scan whose rows no longer
    * exist, but they are metadata and not part of the count.
+   *
+   * Deliberately blind to `active`: an inactive project is *tracked*, so its
+   * rows are not orphans and must never be purged. The `project` row's presence
+   * is the only test, exactly as it was before the mark existed — an inactive
+   * project is one nobody fetches, not one whose history is being discarded.
    */
   purgeUntracked(): number {
     const untracked = (table: string) =>
@@ -1162,10 +1266,14 @@ export class Store {
    * its id from its label, so a rename would change the id and orphan every URL
    * pointing at the person. A person with no aliases left is still returned —
    * otherwise a name somebody typed would silently vanish from the roster.
+   *
+   * The activity mark rides along with each rule. It only decides who the roster
+   * shows by default; every count is computed from the census rows regardless,
+   * because an inactive person's pull requests are a matter of record.
    */
   personRules(): PersonRule[] {
     const persons = this.db
-      .query<PersonRow, []>("SELECT id, label FROM person ORDER BY id")
+      .query<PersonRow, []>("SELECT id, label, active FROM person ORDER BY id")
       .all();
     const aliases = this.db
       .query<
@@ -1187,7 +1295,12 @@ export class Store {
     const rules: PersonRule[] = [];
     for (const person of persons) {
       const id = text(person.id);
-      rules.push({ id, label: text(person.label), aliases: owned.get(id) ?? [] });
+      rules.push({
+        id,
+        label: text(person.label),
+        aliases: owned.get(id) ?? [],
+        active: mark(person.active),
+      });
       owned.delete(id);
     }
     // Alias rows whose person row is missing cannot happen through this API, but
@@ -1195,7 +1308,8 @@ export class Store {
     // one: it would show one human as two. Honour the grouping the file records,
     // under the login the person would fall back to anyway.
     for (const [id, group] of owned) {
-      rules.push({ id, label: loginOf(id), aliases: group });
+      // No person row means no stored opinion, and no opinion means active.
+      rules.push({ id, label: loginOf(id), aliases: group, active: true });
     }
     return rules;
   }
@@ -1226,6 +1340,51 @@ export class Store {
       if (identity === null) return;
       // OR IGNORE, not an upsert: if another person already claims this account,
       // that claim wins. A rename is not a merge and must not steal an alias.
+      this.db
+        .query(
+          "INSERT OR IGNORE INTO person_alias (provider, username, person_id) VALUES (?, ?, ?)",
+        )
+        .run(identity.provider, identity.username, id);
+    });
+    run();
+  }
+
+  /**
+   * Marks a person active or inactive, materialising the row on write exactly as
+   * `renamePerson` does — and for the same reason. The roster offers
+   * census-derived identities, so the common case is an identity nobody has ever
+   * named: without materialising it there is nowhere to put the mark, and
+   * without the alias row beside it the mark would detach from the account the
+   * moment the person is merged or their last project untracked.
+   *
+   * An existing label is left alone. The conflict clause deliberately does not
+   * touch it: this is not a rename, and a person already named must not be
+   * reduced to their login by being marked inactive. A row being created falls
+   * back to the login, which is what the roster would render anyway.
+   *
+   * Inactivity hides somebody from the roster by default and does nothing else.
+   * Their pull requests still count toward every project's numbers — driven by
+   * hand, and the alternative erased 11 real pull requests from a profile the
+   * moment a dormant repository was archived. There is also no way to *clear*
+   * the mark implicitly: a later census that sees the identity again leaves it
+   * standing, because a cron job must not overturn a human decision.
+   */
+  setPersonActive(id: string, active: boolean, at: Date): void {
+    if (id === "") throw new Error("a person needs an id to be marked");
+    const iso = at.toISOString();
+    const identity = identityOf(id);
+    const run = this.db.transaction(() => {
+      this.db
+        .query(
+          "INSERT INTO person (id, label, updated_at, active) VALUES (?, ?, ?, ?)" +
+            " ON CONFLICT(id) DO UPDATE SET active = excluded.active, updated_at = excluded.updated_at",
+        )
+        .run(id, loginOf(id), iso, active ? 1 : 0);
+      // Only an unmerged identity's id names an account. A slug id — a
+      // config-seeded person, or a merge target — claims nothing by itself.
+      if (identity === null) return;
+      // OR IGNORE, as in `renamePerson`: if another person already claims this
+      // account, that claim wins. Marking somebody is not a merge.
       this.db
         .query(
           "INSERT OR IGNORE INTO person_alias (provider, username, person_id) VALUES (?, ?, ?)",
@@ -1347,7 +1506,10 @@ export class Store {
    *
    * Person ids come from `resolvePeople` over the same rules, so a seeded person
    * gets exactly the id the previous, config-derived build gave them and no
-   * bookmarked profile URL moves.
+   * bookmarked profile URL moves. A rule that already carries the mark keeps it:
+   * an import is not a decision, and silently activating somebody a file says is
+   * inactive is the same auto-reactivation a census is forbidden to do. Projects
+   * arrive active — a config file has no way to say otherwise.
    */
   seedTracking(
     projects: Record<Provider, string[]>,
@@ -1359,7 +1521,7 @@ export class Store {
     for (const provider of PROVIDERS) {
       for (const path of projects[provider] ?? []) {
         checkPath(provider, path);
-        tracked.push({ provider, path, addedAt: iso });
+        tracked.push({ provider, path, addedAt: iso, active: true });
       }
     }
     // Resolved outside the transaction: it throws on a blank label, and a throw
@@ -1371,6 +1533,7 @@ export class Store {
         checkUsername(alias.provider, alias.username);
         return alias;
       }),
+      active: person.active,
     }));
 
     const run = this.db.transaction(() => {
@@ -1379,20 +1542,25 @@ export class Store {
       // Prepared once and reused: a seed is a loop, and the configs this was
       // driven against list every project a team has.
       const insertProject = this.db.query(
-        "INSERT OR IGNORE INTO project (provider, path, added_at) VALUES (?, ?, ?)",
+        "INSERT OR IGNORE INTO project (provider, path, added_at, active) VALUES (?, ?, ?, ?)",
       );
       for (const project of tracked) {
-        insertProject.run(project.provider, project.path, project.addedAt);
+        insertProject.run(
+          project.provider,
+          project.path,
+          project.addedAt,
+          project.active ? 1 : 0,
+        );
       }
 
       const insertPerson = this.db.query(
-        "INSERT OR IGNORE INTO person (id, label, updated_at) VALUES (?, ?, ?)",
+        "INSERT OR IGNORE INTO person (id, label, updated_at, active) VALUES (?, ?, ?, ?)",
       );
       const insertAlias = this.db.query(
         "INSERT OR IGNORE INTO person_alias (provider, username, person_id) VALUES (?, ?, ?)",
       );
       for (const person of seeded) {
-        insertPerson.run(person.id, person.label, iso);
+        insertPerson.run(person.id, person.label, iso, person.active ? 1 : 0);
         for (const alias of person.aliases) {
           insertAlias.run(alias.provider, alias.username, person.id);
         }

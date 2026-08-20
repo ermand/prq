@@ -182,6 +182,8 @@ export interface Person {
   id: string;
   label: string;
   aliases: { provider: Provider; username: string }[];
+  /** False when marked inactive. An unclaimed identity is active by default. */
+  active: boolean;
 }
 
 /**
@@ -247,6 +249,17 @@ export interface PersonRule {
   id?: string;
   label: string;
   aliases: { provider: Provider; username: string }[];
+  /**
+   * False when somebody has been marked inactive — they left, or they are not
+   * somebody you want on the roster. Absent means active.
+   *
+   * It changes what is *shown*, never what is counted: an inactive person's pull
+   * requests still count toward every project's numbers, because the work is a
+   * matter of record and somebody leaving does not un-write their code. Driven by
+   * hand before it was built, and the alternative — dropping their rows — rewrote
+   * a project's history every time a person left.
+   */
+  active?: boolean;
 }
 
 export function slug(label: string): string {
@@ -286,7 +299,14 @@ export function resolvePeople(
       for (let n = 2; taken.has(id); n++) id = `${slug(rule.label)}-${n}`;
     }
     taken.add(id);
-    people.push({ id, label: rule.label, aliases: rule.aliases });
+    people.push({
+      id,
+      label: rule.label,
+      aliases: rule.aliases,
+      // Absent means active: every rule predates the mark, and a missing flag
+      // must not read as "hidden".
+      active: rule.active !== false,
+    });
     for (const alias of rule.aliases) of.set(identityKey(alias.provider, alias.username), id);
   }
 
@@ -294,7 +314,8 @@ export function resolvePeople(
     const key = identityKey(identity.provider, identity.username);
     if (identity.username === "" || of.has(key)) continue;
     of.set(key, key);
-    people.push({ id: key, label: identity.username, aliases: [identity] });
+    // An identity nobody has stored an opinion about is active.
+    people.push({ id: key, label: identity.username, aliases: [identity], active: true });
   }
 
   return { people, of };

@@ -36,6 +36,8 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 import { relativeAge } from "../../../src/render";
 import type { PeoplePayload, PersonRow } from "../server/census";
+import { setPersonActive } from "../server/settings";
+import { ActiveToggle } from "./active-toggle";
 import { NameEditor } from "./name-editor";
 import { SameNameMerge, sameNameGroups } from "./same-name";
 import { Badge, Pill, providerLabel } from "./ui";
@@ -74,17 +76,27 @@ export function PeopleList({
   people,
   q,
   bots,
+  inactive,
 }: {
   people: PeoplePayload;
   q?: string;
   bots: boolean;
+  inactive: boolean;
 }) {
   const navigate = useNavigate();
   const filter = q ?? "";
 
   const found = people.people.filter((person) => matches(person, filter));
-  const hiddenBots = bots ? 0 : found.filter((person) => person.bot).length;
-  const visible = bots ? found : found.filter((person) => !person.bot);
+  const visible = found.filter(
+    (person) => (person.active || inactive) && (!person.bot || bots),
+  );
+  // One rule over two independent marks. A bot is a permanent property of an
+  // account; inactive is somebody's decision. They are reported separately
+  // because "hidden" would otherwise mean two different things.
+  const hiddenBots = found.filter((person) => person.bot && !bots).length;
+  const hiddenInactive = found.filter(
+    (person) => !person.active && !person.bot && !inactive,
+  ).length;
   // Computed over what is on screen, so a filter that hides one half of a pair
   // does not leave a merge button pointing at a row you cannot see.
   const duplicates = sameNameGroups(visible);
@@ -95,6 +107,12 @@ export function PeopleList({
         <span className="text-xs text-zinc-500">
           {visible.length} identit{visible.length === 1 ? "y" : "ies"}
           {filter !== "" && <> {" · "}of {people.people.length}</>}
+          {hiddenInactive > 0 && (
+            <>
+              {" · "}
+              <span className="text-amber-300/80">{hiddenInactive} inactive hidden</span>
+            </>
+          )}
           {hiddenBots > 0 && (
             <>
               {" · "}
@@ -115,7 +133,11 @@ export function PeopleList({
             onChange={(e) =>
               navigate({
                 to: "/people",
-                search: { q: e.target.value || undefined, bots: bots ? true : undefined },
+                search: {
+                  q: e.target.value || undefined,
+                  bots: bots ? true : undefined,
+                  inactive: inactive ? true : undefined,
+                },
                 replace: true,
                 resetScroll: false,
               })
@@ -125,7 +147,16 @@ export function PeopleList({
 
           <Link
             to="/people"
-            search={{ q, bots: bots ? undefined : true }}
+            search={{ q, bots: bots ? true : undefined, inactive: inactive ? undefined : true }}
+            resetScroll={false}
+            title="Include people marked inactive. Their work still counts in every project's numbers; they are only off this list."
+          >
+            <Pill active={inactive}>inactive</Pill>
+          </Link>
+
+          <Link
+            to="/people"
+            search={{ q, bots: bots ? undefined : true, inactive: inactive ? true : undefined }}
             resetScroll={false}
             title="Include automation. dependabot opened 126 pull requests and reviewed none, so it is out of the ranking by default."
           >
@@ -196,7 +227,13 @@ function PersonRowView({
    * row cannot navigate away from half-typed text.
    */
   return (
-    <div className="group relative flex items-center gap-3 border-b border-zinc-900 px-4 py-2 hover:bg-zinc-900/60">
+    <div
+      className={`group relative flex items-center gap-3 border-b border-zinc-900 px-4 py-2 hover:bg-zinc-900/60 ${
+        // Dimmed, never hidden here: this row is only reachable because a filter
+        // asked for it, and it has to stay legible enough to switch back on.
+        person.active ? "" : "opacity-60"
+      }`}
+    >
       {!editing && (
         <Link
           to="/people"
@@ -235,6 +272,23 @@ function PersonRowView({
 
         {group !== undefined && !editing && (
           <SameNameMerge person={person} group={group} />
+        )}
+
+        {!editing && (
+          <ActiveToggle
+            active={person.active}
+            what={person.label}
+            inactiveHint="stops them appearing on this roster; every number they contributed stays exactly where it is"
+            onToggle={(active) => setPersonActive({ data: { id: person.id, active } })}
+          />
+        )}
+
+        {/* Surfaced, never acted on. A census must not silently overturn somebody's
+            decision, but a mark this stale is worth a second look. */}
+        {person.contradiction && (
+          <Badge tone="urgent" title="Marked inactive, but has activity in the last 30 days">
+            active recently
+          </Badge>
         )}
       </span>
 

@@ -62,6 +62,10 @@ function person(aliases: [Provider, string][], label = "Ermand"): Person {
     id: "ermand",
     label,
     aliases: aliases.map(([provider, username]) => ({ provider, username })),
+    // Insights are blind to this on purpose: an inactive person's work still
+    // counts everywhere. The mark changes what is fetched and shown, never what
+    // is computed.
+    active: true,
   };
 }
 

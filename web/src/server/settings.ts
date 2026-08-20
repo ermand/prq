@@ -27,6 +27,8 @@ export interface ProjectRow {
   provider: Provider;
   path: string;
   addedAt: string;
+  /** False when marked inactive: still tracked and counted, never fetched. */
+  active: boolean;
   /** Census rows on hand, so the UI can say what removing would hide. */
   stored: number;
   censusAt: string | null;
@@ -101,6 +103,7 @@ export const getSettings = createServerFn({ method: "GET" }).handler(() =>
           provider: p.provider,
           path: p.path,
           addedAt: p.addedAt,
+          active: p.active,
           stored: counts.get(key) ?? 0,
           censusAt: run?.at.toISOString() ?? null,
         };
@@ -134,6 +137,47 @@ export const removeProject = createServerFn({ method: "POST" })
 export const purgeUntracked = createServerFn({ method: "POST" }).handler(() =>
   withStore((store) => ({ deleted: store.purgeUntracked() })),
 );
+
+/**
+ * Marking a project inactive stops it being fetched, and does nothing else. Its
+ * stored history keeps counting on every page, because history is a record —
+ * archiving a dormant repository must not erase the eleven pull requests
+ * somebody really wrote in it.
+ */
+export const setProjectActive = createServerFn({ method: "POST" })
+  .validator((data: unknown) => {
+    const input = fields(data);
+    return {
+      ...parseProject(data),
+      active: input.get("active") === true,
+    };
+  })
+  .handler(({ data }) =>
+    withStore((store) => ({
+      changed: store.setProjectActive(data.provider, data.path, data.active),
+      active: data.active,
+    })),
+  );
+
+/**
+ * Marking a person inactive takes them off the roster by default and leaves
+ * every number they contributed exactly where it was. Somebody leaving does not
+ * un-write their code, so a project's history must not rewrite itself.
+ */
+export const setPersonActive = createServerFn({ method: "POST" })
+  .validator((data: unknown) => {
+    const input = fields(data);
+    return {
+      id: parseText(input.get("id"), "person id"),
+      active: input.get("active") === true,
+    };
+  })
+  .handler(({ data }) =>
+    withStore((store) => {
+      store.setPersonActive(data.id, data.active, new Date());
+      return { id: data.id, active: data.active };
+    }),
+  );
 
 export const renamePerson = createServerFn({ method: "POST" })
   .validator((data: unknown) => {

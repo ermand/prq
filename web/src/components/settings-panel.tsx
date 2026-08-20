@@ -37,7 +37,13 @@ import { useState } from "react";
 import type { Provider } from "../../../src/domain";
 import { relativeAge } from "../../../src/render";
 import type { ProjectRow, SettingsPayload } from "../server/settings";
-import { addProject, purgeUntracked, removeProject } from "../server/settings";
+import {
+  addProject,
+  purgeUntracked,
+  removeProject,
+  setProjectActive,
+} from "../server/settings";
+import { ActiveToggle } from "./active-toggle";
 import { providerLabel } from "./ui";
 
 /**
@@ -46,7 +52,7 @@ import { providerLabel } from "./ui";
  * with the digits they hold instead of stranding them on a 3000px screen.
  */
 const COLS =
-  "grid grid-cols-[2.5rem_minmax(0,1fr)_5rem_5rem_5rem_6rem] items-center gap-x-3 px-4";
+  "grid grid-cols-[2.5rem_minmax(0,1fr)_5rem_5rem_5rem_5rem_6rem] items-center gap-x-3 px-4";
 
 /**
  * Everything in the scrolling area is capped and centred rather than
@@ -268,6 +274,7 @@ export function SettingsPanel({ settings }: { settings: SettingsPayload }) {
           <span className="text-right">Stored</span>
           <span className="text-right">Census</span>
           <span className="text-right">Added</span>
+          <span className="text-right">Fetching</span>
           <span className="text-right">Tracking</span>
         </div>
 
@@ -475,7 +482,13 @@ function ProjectLine({
   return (
     <div
       className={`border-l-2 ${
-        confirming ? "border-l-amber-400/70 bg-amber-500/[0.04]" : "border-l-transparent"
+        confirming
+          ? "border-l-amber-400/70 bg-amber-500/[0.04]"
+          : row.active
+            ? "border-l-transparent"
+            : // Dimmed rather than hidden: it is still tracked and still counted,
+              // and hiding it would make it unfindable to turn back on.
+              "border-l-amber-500/25 opacity-60"
       }`}
     >
       <div className={`${COLS} py-1.5 font-mono text-2xs`}>
@@ -501,6 +514,19 @@ function ProjectLine({
         </span>
         <span className="text-right">
           <Age iso={row.addedAt} now={now} />
+        </span>
+
+        <span className="flex justify-end">
+          <ActiveToggle
+            active={row.active}
+            what={`${row.provider}:${row.path}`}
+            inactiveHint="stops it being synced and censused; its stored history keeps counting everywhere"
+            onToggle={(active) =>
+              setProjectActive({
+                data: { provider: row.provider, path: row.path, active },
+              })
+            }
+          />
         </span>
 
         <span className="text-right">

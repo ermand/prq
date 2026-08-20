@@ -301,6 +301,34 @@ both belong here rather than in a ticket:
   prq still never merges logins by itself: the same name on two forges is often two
   people.
 
+- **Inactive means "not fetched", and never "did not happen"** (2026-08-20).
+  Projects and people can be marked inactive. Driven by hand first
+  (`prototype/activity-model` branch), because the toggle is trivial and its
+  interactions are not — prq already had two adjacent mechanisms, untracked
+  projects and bot exclusion, and a third overlapping one would have rotted.
+  Four rules came out of it.
+  **History is a record.** An inactive project's rows still count on every page;
+  an inactive person still counts in every project's numbers. The alternative was
+  driven and rejected: dropping an inactive person's rows rewrote a project's
+  history every time somebody left, and archiving a dormant repository deleted
+  eleven pull requests Marin really wrote. Verified live: with `kesh/kesh-back`
+  inactive the fetch list dropped it while its 329 rows stayed readable and
+  Marin's 13/13/5/3 did not move; `dionverushi` marked inactive still leads
+  pok-auctions with 282 opened.
+  **The split lives in one place.** `projects()` returns everything tracked with
+  its mark and drives the pages; `projectsByProvider()` returns active only and is
+  the single list sync and census consume. Inactivity is therefore unable to
+  affect anything except fetching.
+  **No auto-reactivation.** A person who ships while marked inactive keeps the
+  mark and the row says `active recently` instead. A scheduled job must not
+  overturn a human decision; surfacing the contradiction is the honest middle.
+  **Bots stay a separate mark.** A bot is a permanent property of an account and
+  inactive is a judgement, so they share one filter and two flags, and the roster
+  counts them separately.
+  Untracked survives alongside inactive because the two are genuinely different,
+  which only became obvious side by side: inactive left Marin with one row,
+  untracked left him with zero.
+
 ## Not yet specified
 
 - **Cursor paging, and what a project too big to scan means.** Truncation is now

@@ -23,6 +23,8 @@ export interface PeopleSearch {
   id?: string;
   q?: string;
   bots?: boolean;
+  /** Reveal people marked inactive. Their numbers were never withheld. */
+  inactive?: boolean;
 }
 
 export const Route = createFileRoute("/people")({
@@ -32,6 +34,9 @@ export const Route = createFileRoute("/people")({
     q: typeof search.q === "string" && search.q !== "" ? search.q : undefined,
     /** Bots are excluded by default; `dependabot` outranks most of the humans. */
     bots: search.bots === true || search.bots === "true" ? true : undefined,
+    // Inactive people are hidden by default too, and for the same reason: the
+    // roster answers "who is on the team", not "who ever committed".
+    inactive: search.inactive === true || search.inactive === "true" ? true : undefined,
   }),
   loaderDeps: ({ search }) => ({ id: search.id }),
   loader: async ({ deps }) => ({
@@ -43,7 +48,7 @@ export const Route = createFileRoute("/people")({
 
 function People() {
   const { people, profile } = Route.useLoaderData();
-  const { id, q, bots } = Route.useSearch();
+  const { id, q, bots, inactive } = Route.useSearch();
 
   if (people.empty) {
     return (
@@ -61,5 +66,7 @@ function People() {
     return <PersonProfile profile={profile} />;
   }
 
-  return <PeopleList people={people} q={q} bots={bots === true} />;
+  return (
+    <PeopleList people={people} q={q} bots={bots === true} inactive={inactive === true} />
+  );
 }

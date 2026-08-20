@@ -68,12 +68,24 @@ export interface PersonRow {
   id: string;
   label: string;
   bot: boolean;
+  /**
+   * False when marked inactive. Two independent marks, one shared filter: a bot
+   * is a permanent property of an account, inactive is somebody's decision, and
+   * collapsing them would make "hide from the roster" mean two different things.
+   */
+  active: boolean;
   aliases: { provider: Provider; username: string }[];
   opened: number;
   merged: number;
   reviews: number;
   repos: number;
   lastActivity: string | null;
+  /**
+   * True when somebody marked inactive still has recent work. Surfaced rather
+   * than acted on: a census must never silently reactivate a person, but a
+   * contradiction worth a second look should be visible.
+   */
+  contradiction: boolean;
 }
 
 export interface PeoplePayload {
@@ -277,6 +289,12 @@ export const getPeople = createServerFn({ method: "GET" }).handler(() =>
       row.repos.add(`${review.provider}:${review.repo}`);
     }
 
+    // A month, in milliseconds. "Recent" has to mean something, and a census is
+    // run occasionally rather than nightly, so a tighter window would flag
+    // nothing on a store that was last read three weeks ago.
+    const RECENT_MS = 30 * 24 * 60 * 60 * 1000;
+    const recentAfter = new Date(Date.now() - RECENT_MS).toISOString();
+
     const rows: PersonRow[] = people.map((person: Person) => {
       const row = tally.get(person.id);
       return {
@@ -284,12 +302,15 @@ export const getPeople = createServerFn({ method: "GET" }).handler(() =>
         label: person.label,
         // A merged person is a bot only if every one of its accounts is.
         bot: person.aliases.every((a) => isBot(a.username)),
+        active: person.active,
         aliases: person.aliases,
         opened: row?.opened ?? 0,
         merged: row?.merged ?? 0,
         reviews: row?.reviews ?? 0,
         repos: row?.repos.size ?? 0,
         lastActivity: row?.last ?? null,
+        contradiction:
+          !person.active && row?.last !== undefined && row.last !== null && row.last > recentAfter,
       };
     });
 

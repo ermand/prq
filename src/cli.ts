@@ -87,7 +87,11 @@ function projectsCommand(store: Store, args: string[]): void {
       return;
     }
     for (const row of rows) {
-      process.stdout.write(`${row.provider}\t${row.path}\n`);
+      // The mark is printed, not implied by omission: an inactive project is
+      // still tracked and its history still counts, it is merely not fetched.
+      process.stdout.write(
+        `${row.provider}\t${row.path}${row.active ? "" : "\t(inactive)"}\n`,
+      );
     }
     return;
   }
@@ -121,7 +125,24 @@ function projectsCommand(store: Store, args: string[]): void {
     return;
   }
 
-  throw new Error(`unknown projects action ${JSON.stringify(action)} — list, add or rm`);
+  if (action === "deactivate" || action === "activate") {
+    const active = action === "activate";
+    const changed = store.setProjectActive(provider, path, active);
+    process.stdout.write(
+      !changed
+        ? `${provider}:${path} is not tracked\n`
+        : active
+          ? `${provider}:${path} is active — it will be fetched again\n`
+          : // The half worth stating: it stops being fetched and stops nothing else.
+            `${provider}:${path} is inactive — no longer synced or censused, ` +
+            `its stored history still counts everywhere\n`,
+    );
+    return;
+  }
+
+  throw new Error(
+    `unknown projects action ${JSON.stringify(action)} — list, add, rm, activate or deactivate`,
+  );
 }
 
 async function initConfig(): Promise<void> {

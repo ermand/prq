@@ -226,6 +226,38 @@ it back restores the history with no re-census, which matters because a census
 takes minutes. Rows belonging to untracked projects are counted on the Settings
 page and can be purged explicitly.
 
+### Active and inactive
+
+Both projects and people can be marked inactive, on the Settings page and the
+roster respectively, or with `prq projects activate` / `deactivate`.
+
+**Inactive means prq stops fetching it, and nothing else.** An inactive project
+is skipped by `sync` and `census`; an inactive person drops off the roster. In
+both cases the stored history keeps counting everywhere — project totals, review
+coverage, every profile.
+
+That is the whole design, and the alternative was tested and rejected: dropping
+an inactive person's rows rewrote a project's history every time somebody left,
+and dropping an archived project's rows deleted eleven pull requests Marin
+really wrote. History is a record. Verified on this data: with
+`kesh/kesh-back` inactive, the fetch list dropped it while its 329 stored rows
+stayed readable and Marin's `13 / 13 / 5 / 3` did not move; with `dionverushi`
+inactive, he still leads pok-auctions with 282 opened.
+
+Three states, not two:
+
+| | listed | fetched | history counts |
+| --- | --- | --- | --- |
+| active | yes | yes | yes |
+| inactive | yes, dimmed | **no** | **yes** |
+| removed | no | no | no |
+
+Marking someone inactive **never** reverses itself. If they turn up in a later
+census the mark survives and the row says `active recently` instead — a scheduled
+job has no business overturning a decision you made. Bots stay a separate mark:
+a bot is a permanent property of an account, inactive is a judgement, and the
+roster counts them separately (`27 identities · 1 inactive hidden · 2 bots hidden`).
+
 ### People
 
 `/people` is the roster, and a person opens a profile: what they wrote, per
@@ -328,6 +360,8 @@ prq census                                 # read every project's full history
 prq projects list                          # what is tracked
 prq projects add github owner/repo         # takes effect immediately
 prq projects rm gitlab group/sub/project   # untracks; stored history survives
+prq projects deactivate github owner/repo  # stop fetching; history still counts
+prq projects activate github owner/repo    # resume
 bun run scan owner/repo [owner/repo ...]   # headless, ad-hoc, ignores the store
 bun run scan owner/repo --json             # raw
 bun src/cli.ts --state ./other.db          # use a different store for one run
