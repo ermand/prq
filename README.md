@@ -153,6 +153,12 @@ change history for that row — all of it already in the store, none of it costi
 request. The grouping, the filter and the selected row live in the URL, so a
 reload or a back button restores the view the terminal forgets on exit.
 
+Each row has two targets that do not overlap. The body selects the row; the `↗`
+at the right edge leaves for the forge, in a new tab. It is a real anchor, so
+middle-click and cmd-click open a background tab and "copy link address" works.
+A PR whose API link failed validation shows `✕` instead, rather than a control
+that does nothing.
+
 **Sync is still explicit.** A page load calls a read-only server function; it
 never touches the network. The sync button is the only thing that does, and it is
 the only write path in the app — every other outbound action is an anchor to the
