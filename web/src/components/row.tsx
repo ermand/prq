@@ -1,11 +1,18 @@
 /**
  * One PR, as a row.
  *
- * Two distinct targets, deliberately not overlapping: the body selects the row
- * and opens the detail panel, and the arrow at the right edge leaves for the
- * forge. prq never acts on a PR, so "open this somewhere that can" is the only
- * outbound verb — and it gets its own permanent, predictable hit area rather
- * than hiding behind a hover.
+ * A single line of aligned columns rather than a stacked block. Stacked, a wide
+ * screen put a title and its own age a thousand pixels apart and spent the
+ * middle on nothing; in columns the width goes to the title, everything else
+ * lines up vertically, and a row costs one line instead of three.
+ *
+ * Below `lg` the flex container wraps, so the same markup degrades to the
+ * stacked form on a narrow window without a second layout to maintain.
+ *
+ * Two targets that do not overlap: the body selects the row and opens the detail
+ * panel, and the arrow at the right edge leaves for the forge. prq never acts on
+ * a PR, so "open this somewhere that can" is the only outbound verb — and it
+ * gets a permanent, predictable hit area rather than hiding behind a hover.
  *
  * The two cannot be nested. An `<a href>` inside a router `<Link>` is a nested
  * anchor, which is invalid HTML, so they sit side by side inside the row.
@@ -27,6 +34,20 @@ const FORGE: Record<PullRequest["provider"], string> = {
   github: "GitHub",
   gitlab: "GitLab",
 };
+
+/**
+ * A repository path split so the informative end always renders.
+ * `a/b/kesh-back` -> prefix `a/b/`, leaf `kesh-back`.
+ */
+function repoPrefix(repo: string): string {
+  const cut = repo.lastIndexOf("/");
+  return cut === -1 ? "" : repo.slice(0, cut + 1);
+}
+
+function repoLeaf(repo: string): string {
+  const cut = repo.lastIndexOf("/");
+  return cut === -1 ? repo : repo.slice(cut + 1);
+}
 
 export function Row({
   pr,
@@ -58,77 +79,89 @@ export function Row({
         to="/"
         search={(prev) => ({ q: prev.q, flat: prev.flat, pr: pr.id })}
         resetScroll={false}
-        className="flex min-w-0 flex-1 items-start gap-3 py-2 pl-3 hover:bg-zinc-800/60"
+        className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1 py-1.5 pl-3 hover:bg-zinc-800/60 lg:flex-nowrap"
       >
-        <div className="min-w-0 flex-1">
-          <div className="flex items-baseline gap-2">
-            <span className="font-mono text-[11px] text-zinc-500">
-              {providerLabel(pr.provider)}
-            </span>
-            <span className="truncate font-mono text-[11px] text-zinc-500">
-              {pr.repo}
-            </span>
-            <span className="font-mono text-[11px] text-zinc-400">#{pr.number}</span>
-          </div>
+        {/* Fixed column so the numbers line up down the list.
 
-          <div className="mt-0.5 flex items-center gap-2">
-            {pr.draft && (
-              <span className="shrink-0 text-[11px] font-medium tracking-wide text-zinc-500 uppercase">
-                draft
-              </span>
-            )}
-            <span
-              className={`truncate text-sm ${selected ? "text-white" : "text-zinc-100"}`}
+            The path sits in its own clipping box with the number *outside* it:
+            a long single-segment repo used to overflow the column and shunt
+            `#22` straight into the title with no gap.
+
+            Within that box the prefix gives way first and the last segment is
+            kept, because cutting from the right gave `…/kesh/k…` — losing
+            exactly the part that tells `kesh-back` from `kesh-front`. */}
+        <span
+          title={pr.repo}
+          className="flex shrink-0 items-baseline gap-1.5 font-mono text-[11px] text-zinc-500 lg:w-[14rem] xl:w-[18rem] 2xl:w-[22rem]"
+        >
+          <span className="shrink-0 text-zinc-600">
+            {providerLabel(pr.provider)}
+          </span>
+          {/* `shrink` without grow: as `flex-1` the prefix stretched and left a
+              gap in the middle of short paths, `nebulaltd/    oddsy-gateway`. */}
+          <span className="flex min-w-0 shrink items-baseline">
+            <span className="min-w-0 shrink truncate">{repoPrefix(pr.repo)}</span>
+            <span className="max-w-full shrink-0 truncate">{repoLeaf(pr.repo)}</span>
+          </span>
+          <span className="shrink-0 text-zinc-400">#{pr.number}</span>
+        </span>
+
+        <span className="flex min-w-0 flex-1 items-baseline gap-2">
+          {pr.draft && (
+            <span className="shrink-0 text-[10px] font-semibold tracking-wide text-zinc-500 uppercase">
+              draft
+            </span>
+          )}
+          <span
+            className={`truncate text-sm ${selected ? "text-white" : "text-zinc-100"}`}
+          >
+            {pr.title}
+          </span>
+        </span>
+
+        <span className="flex shrink-0 flex-wrap items-center gap-1.5">
+          {verdict && <Badge tone={verdict.tone}>{verdict.text}</Badge>}
+          {checks && <Badge tone={checks.tone}>{checks.text}</Badge>}
+          {merge && <Badge tone={merge.tone}>{merge.text}</Badge>}
+          {pr.viaCodeOwners && (
+            <Badge tone="mute" title="Requested via CODEOWNERS, not by name">
+              codeowners
+            </Badge>
+          )}
+          {pr.stacks.map((stack) => (
+            <Badge
+              key={stack.id}
+              tone="info"
+              title={
+                stack.precision === "approximate"
+                  ? "Stack position is approximate on this provider"
+                  : undefined
+              }
             >
-              {pr.title}
-            </span>
-          </div>
+              stack {stack.position}/{stack.size}
+              {stack.precision === "approximate" && "~"}
+            </Badge>
+          ))}
+          {pr.otherReviews > 0 && (
+            <Badge tone="mute" title={`${pr.otherReviews} opinionated review(s)`}>
+              +{pr.otherReviews}
+            </Badge>
+          )}
+          {changes.map((change) => (
+            <Badge key={change.kind} tone="urgent">
+              {label(change.kind)}
+            </Badge>
+          ))}
+        </span>
 
-          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-            {verdict && <Badge tone={verdict.tone}>{verdict.text}</Badge>}
-            {checks && <Badge tone={checks.tone}>{checks.text}</Badge>}
-            {merge && <Badge tone={merge.tone}>{merge.text}</Badge>}
-            {pr.viaCodeOwners && (
-              <Badge tone="mute" title="Requested via CODEOWNERS, not by name">
-                codeowners
-              </Badge>
-            )}
-            {pr.stacks.map((stack) => (
-              <Badge
-                key={stack.id}
-                tone="info"
-                title={
-                  stack.precision === "approximate"
-                    ? "Stack position is approximate on this provider"
-                    : undefined
-                }
-              >
-                stack {stack.position}/{stack.size}
-                {stack.precision === "approximate" && "~"}
-              </Badge>
-            ))}
-            {pr.otherReviews > 0 && (
-              <Badge tone="mute">
-                {pr.otherReviews} other{" "}
-                {pr.otherReviews === 1 ? "review" : "reviews"}
-              </Badge>
-            )}
-            {changes.map((change) => (
-              <Badge key={change.kind} tone="urgent">
-                {label(change.kind)}
-              </Badge>
-            ))}
-          </div>
-        </div>
-
-        <div className="flex shrink-0 flex-col items-end gap-1 pt-0.5">
-          <span className="font-mono text-[11px] text-zinc-500">
-            {relativeAge(pr.updatedAt, now)}
-          </span>
-          <span className="max-w-[9rem] truncate text-[11px] text-zinc-500">
-            {pr.author}
-          </span>
-        </div>
+        <span className="w-10 shrink-0 text-right font-mono text-[11px] text-zinc-500">
+          {relativeAge(pr.updatedAt, now)}
+        </span>
+        {/* First thing to go when the window is narrow: the author matters least
+            of the three, and the detail panel always has it. */}
+        <span className="hidden w-28 shrink-0 truncate text-right text-[11px] text-zinc-500 xl:block">
+          {pr.author}
+        </span>
       </Link>
 
       <OpenOnForge pr={pr} />

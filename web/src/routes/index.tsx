@@ -212,7 +212,7 @@ function Board() {
           )}
         </main>
 
-        <aside className="hidden w-[24rem] shrink-0 overflow-y-auto border-l border-zinc-800 bg-zinc-900/30 lg:block">
+        <aside className="hidden w-[22rem] shrink-0 overflow-y-auto border-l border-zinc-800 bg-zinc-900/30 lg:block xl:w-[26rem] 2xl:w-[30rem]">
           {selected === null ? (
             <p className="p-4 text-xs text-zinc-500">
               Select a row to see its reviewers, stack, and what changed.
